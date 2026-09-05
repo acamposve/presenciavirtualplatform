@@ -1,0 +1,20 @@
+<Project Sdk="Microsoft.NET.Sdk.Web">
+
+  <ItemGroup>
+    <ProjectReference Include="..\..\Modules\Core\PresenciaVirtual.Modules.Core\PresenciaVirtual.Modules.Core.csproj" />
+    <ProjectReference Include="..\..\Modules\Core\PresenciaVirtual.Modules.Core.Infrastructure\PresenciaVirtual.Modules.Core.Infrastructure.csproj" />
+    <ProjectReference Include="..\..\Modules\Restaurant\PresenciaVirtual.Modules.Restaurant\PresenciaVirtual.Modules.Restaurant.csproj" />
+    <ProjectReference Include="..\..\Modules\Restaurant\PresenciaVirtual.Modules.Restaurant.Infrastructure\PresenciaVirtual.Modules.Restaurant.Infrastructure.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.AspNetCore.OpenApi" Version="10.0.11" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+  </PropertyGroup>
+
+</Project>

@@ -1,0 +1,16 @@
+<Solution>
+  <Folder Name="/Api/">
+    <Project Path="Api/PresenciaVirtual.Api/PresenciaVirtual.Api.csproj" />
+  </Folder>
+  <Folder Name="/Modules/" />
+  <Folder Name="/Modules/Core/">
+    <Project Path="Modules/Core/PresenciaVirtual.Modules.Core.Infrastructure/PresenciaVirtual.Modules.Core.Infrastructure.csproj" />
+    <Project Path="Modules/Core/PresenciaVirtual.Modules.Core.Tests/PresenciaVirtual.Modules.Core.Tests.csproj" />
+    <Project Path="Modules/Core/PresenciaVirtual.Modules.Core/PresenciaVirtual.Modules.Core.csproj" />
+  </Folder>
+  <Folder Name="/Modules/Restaurant/">
+    <Project Path="Modules/Restaurant/PresenciaVirtual.Modules.Restaurant.Infrastructure/PresenciaVirtual.Modules.Restaurant.Infrastructure.csproj" />
+    <Project Path="Modules/Restaurant/PresenciaVirtual.Modules.Restaurant.Tests/PresenciaVirtual.Modules.Restaurant.Tests.csproj" />
+    <Project Path="Modules/Restaurant/PresenciaVirtual.Modules.Restaurant/PresenciaVirtual.Modules.Restaurant.csproj" />
+  </Folder>
+</Solution>

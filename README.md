@@ -65,6 +65,21 @@ Academy       Students, teachers, courses, enrollment, attendance, evaluation
 
 See [`technology.md`](technology.md) for details.
 
+## Getting Started
+
+Requirements: [.NET 10 SDK](https://dotnet.microsoft.com/download) (pinned in `global.json`) and Docker.
+
+```bash
+# 1. Start PostgreSQL
+docker compose up -d
+
+# 2. Build and run the API
+dotnet build src/PresenciaVirtual.slnx
+dotnet run --project src/Api/PresenciaVirtual.Api
+```
+
+The API exposes health checks at `/health`, `/health/live`, and `/health/ready`. Local connection strings live in the gitignored `appsettings.Development.json` (see `.env.example` for the matching Docker Compose credentials).
+
 ## Contributing
 
 - `main` is protected. All changes are merged through pull requests — see [`development-workflow.md`](development-workflow.md).
