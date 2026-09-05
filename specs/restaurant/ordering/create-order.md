@@ -1,6 +1,6 @@
 # Specification: Ordering / CreateOrder
 
-**Status:** Draft — Pending Review
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Ordering
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md), [ADR 0001 — Tenant Vertical Activation, Organization and Location Model](../../../docs/adr/0001-tenant-vertical-organization-location-model.md)
@@ -39,13 +39,14 @@ This use case assumes a Table already exists for the tenant. Table Management (c
 4. The system MUST generate a unique identifier for the new order.
 5. The system MUST record the tenant, the table, the creating user, and the creation timestamp on the order.
 6. The system MUST return the created order's identifier and status to the caller.
+7. The system MUST support an optional `Idempotency-Key` request header. If a client supplies one, and a prior successful request with the same key and tenant already produced an order, the system MUST return that original order instead of creating a duplicate.
 
 ## Non-Functional Requirements
 
 - **Tenant isolation:** enforced per ADR 0002 on every read and write involved in this use case (table lookup and order creation).
 - **Consistency:** the created order must be immediately visible to a subsequent read by the same tenant (no eventual consistency for this operation).
 - **Observability:** the request must be traceable via structured logging with a correlation ID (per `constitution.md` Article XI). Persisted audit trail (Core Audit Logging capability) is explicitly out of scope for this slice — see Out of Scope.
-- **Idempotency:** not guaranteed in this first version; see Open Questions.
+- **Idempotency:** guaranteed for repeated requests carrying the same `Idempotency-Key` (FR7, BR6); a request without one has no idempotency guarantee.
 
 ## Business Rules
 
@@ -54,6 +55,7 @@ This use case assumes a Table already exists for the tenant. Table Management (c
 - **BR3:** An Order MUST NOT be created referencing a Table that belongs to a different Tenant than the authenticated user's.
 - **BR4:** A newly created Order's status is always `Open`; there is no way to create an Order directly in any other status through this capability.
 - **BR5:** A newly created Order starts with zero items and a total of zero.
+- **BR6:** An `Idempotency-Key`, when supplied, uniquely identifies a single logical create-order attempt within a tenant. Replaying the same key MUST NOT create more than one Order. Reusing a key with a different request (e.g. a different `TableId`) MUST be rejected rather than silently accepted.
 
 ## Acceptance Criteria
 
@@ -63,6 +65,8 @@ This use case assumes a Table already exists for the tenant. Table Management (c
 - **AC4 — Missing permission:** Given an authenticated user without the `restaurant.orders.create` permission, when they attempt to create an order, then the request is rejected with Forbidden and no Order is created.
 - **AC5 — Unauthenticated request:** Given no valid authentication, when create-order is called, then the request is rejected as Unauthorized.
 - **AC6 — Table does not exist:** Given a `TableId` that does not exist at all, when a user attempts to create an order for it, then the request is rejected as Not Found.
+- **AC7 — Idempotent replay:** Given a prior successful create-order request with `Idempotency-Key: K`, when the same request is repeated with the same key `K` and the same `TableId`, then the system returns the original Order (same `OrderId`) and does not create a new one.
+- **AC8 — Idempotency key reuse conflict:** Given a prior successful create-order request with `Idempotency-Key: K` for `TableId: A`, when a new request reuses key `K` but specifies a different `TableId: B`, then the request is rejected as a Conflict.
 
 ## Domain Concepts
 
@@ -88,6 +92,7 @@ Add `Order` and `OrderStatus` to `glossary.md` under Restaurant once this specif
 | `TableId` missing or malformed in request | 400 Bad Request |
 | `TableId` does not exist, or belongs to a different tenant | 404 Not Found |
 | Table already has an `Open` order | 409 Conflict |
+| `Idempotency-Key` reused with a different request (e.g. different `TableId`) | 409 Conflict |
 
 Internal implementation details (e.g. database constraint names) MUST NOT be exposed in any error response, per `constitution.md` Article VIII and `architecture.md` §26.
 
@@ -97,6 +102,7 @@ Internal implementation details (e.g. database constraint names) MUST NOT be exp
 - **Writes:** a new Order record scoped to the caller's tenant.
 - The persistence layer MUST guarantee BR2 (at most one `Open` order per table) — e.g. via a uniqueness constraint over `(TenantId, TableId)` filtered to `Status = Open` — rather than relying solely on an application-level check-then-write, to avoid a race condition between concurrent requests.
 - Tenant isolation on both the Table read and the Order write MUST follow ADR 0002 (application-level scoping plus PostgreSQL RLS).
+- When an `Idempotency-Key` is supplied, the persistence layer MUST record it alongside the tenant and the resulting `OrderId`, and enough of the original request to detect reuse with a different payload (BR6). The retention window for idempotency records is an infrastructure detail, not a business rule, and may be defined at implementation time.
 
 ## Integration Requirements
 
@@ -112,6 +118,7 @@ Internal implementation details (e.g. database constraint names) MUST NOT be exp
   - AC1–AC6 above, executed against the real API and database.
   - Cross-tenant isolation: a request authenticated as Tenant A must never be able to create an order against a Table belonging to Tenant B (must observe AC3, not merely trust application logic), per ADR 0002 rule 8.
   - Concurrency: two simultaneous create-order requests for the same table must not both succeed (BR2 enforced under race conditions).
+  - Idempotency: repeating a request with the same `Idempotency-Key` returns the original order without creating a duplicate (AC7); reusing a key with a different `TableId` is rejected (AC8, BR6).
 - **End-to-end tests:** deferred until `AddItem` and `CloseOrder` exist, so the full order lifecycle (`architecture.md` §29) can be exercised together.
 
 ## Out of Scope
@@ -127,10 +134,9 @@ Internal implementation details (e.g. database constraint names) MUST NOT be exp
 - Core Audit Logging capability (persisted audit trail) — structured logging only for this slice.
 - Organization/Location modeling — the Order references a Tenant and a Table directly; no Organization or Location entity is required.
 - Reservations linkage (an order created from a reservation).
-- Counter/take-away orders without a table.
+- Counter/take-away orders without a table — **decided:** every order must correspond to a table; this is not a future capability, it is a permanent constraint of this capability.
+- Table Assignment (which waiter is responsible for which table, including a maximum number of tables per waiter) — future specification, not yet written. `CreateOrder` does **not** currently require the table to be assigned to the requesting user: any authenticated user with `restaurant.orders.create` may create an order for any table in their tenant. The business intent behind limiting concurrent orders per waiter is to cap how many *tables* a waiter is assigned, not to cap order count directly — once Table Assignment exists, an order-count limit per waiter follows automatically from BR2 (at most one open order per table) and the waiter's assigned-table count, without needing a separate limit rule here.
 
 ## Open Questions
 
-- Should `CreateOrder` support orders without a table (counter/take-away), or is that a separate future capability? Not required for this specification.
-- Should the endpoint accept an idempotency key to make retries/double-submission safe? Not implemented in this version; worth revisiting once a real client (POS UI) exists.
-- Should there be a limit on how many orders a single user can have open concurrently across different tables? No business requirement identified yet.
+- Once Table Assignment exists, should `CreateOrder` be updated to require that the table is assigned to the requesting waiter? Deferred until that specification is written.
