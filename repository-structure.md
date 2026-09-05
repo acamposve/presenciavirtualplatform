@@ -30,7 +30,7 @@ This document describes the physical layout of the repository, mirroring the log
 ## Notes
 
 - `constitution.md` and `architecture.md` are governance documents and take precedence over any other document in case of conflict.
-- `specs/` holds one specification per business capability, grouped by bounded context. A specification MUST exist and be reviewed before implementation begins (Constitution Article I).
+- `specs/` holds one specification per use case, grouped by bounded context and business capability: `specs/<context>/<capability>/<use-case>.md` (e.g. `specs/restaurant/ordering/create-order.md`). `specs/template.md` defines the required structure. A specification MUST exist and be reviewed before implementation begins (Constitution Article I).
 - `docs/adr/` holds Architecture Decision Records for significant architectural decisions (Constitution Article XXI, Architecture Section 38).
 - `src/` will be organized internally following the Modular Monolith and Vertical Slice principles once implementation begins; its internal structure is not duplicated here to avoid documentation drift — see `architecture.md` Sections 4, 7 and 9 for the target shape.
 
