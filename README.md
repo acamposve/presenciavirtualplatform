@@ -80,6 +80,14 @@ dotnet run --project src/Api/PresenciaVirtual.Api
 
 The API exposes health checks at `/health`, `/health/live`, and `/health/ready`. Local connection strings live in the gitignored `appsettings.Development.json` (see `.env.example` for the matching Docker Compose credentials).
 
+### Running Tests
+
+```bash
+dotnet test src/PresenciaVirtual.slnx
+```
+
+Integration tests spin up their own ephemeral PostgreSQL container via [Testcontainers](https://testcontainers.com/) — Docker must be running, but `docker compose up` is not required for tests.
+
 ## Contributing
 
 - `main` is protected. All changes are merged through pull requests — see [`development-workflow.md`](development-workflow.md).
