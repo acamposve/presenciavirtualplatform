@@ -17,8 +17,17 @@ Technology choices MAY evolve. Changing an entry in this document MUST be justif
 | Web framework | ASP.NET Core, Minimal APIs |
 | Database | PostgreSQL |
 | Data access | Dapper |
+| Migrations | DbUp (plain SQL scripts) |
+| Authentication | JWT Bearer — minimal mechanism for the first implementation; see [ADR 0005](docs/adr/0005-minimal-authentication-for-first-implementation.md) |
 | Caching / coordination | Redis (where justified) |
 | Real-time | SignalR (where required) |
+
+## Testing
+
+| Concern | Technology |
+|---|---|
+| Test framework | xUnit |
+| Integration testing | Testcontainers (ephemeral PostgreSQL per test run) |
 
 ## Frontend
 
