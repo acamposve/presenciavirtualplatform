@@ -26,7 +26,7 @@ public static class OrderEndpoints
         var errors = CreateOrderValidator.Validate(command);
         if (errors.Count > 0)
         {
-            return Results.ValidationProblem(errors.ToDictionary(_ => "request", e => new[] { e }));
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [.. errors] });
         }
 
         try

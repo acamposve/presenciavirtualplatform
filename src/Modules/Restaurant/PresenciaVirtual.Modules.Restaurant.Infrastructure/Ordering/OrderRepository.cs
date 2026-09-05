@@ -22,18 +22,27 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
         return await connection.ExecuteScalarAsync<bool>(sql, new { tenantId, tableId });
     }
 
-    public async Task AddAsync(Order order, CancellationToken cancellationToken = default)
+    private const string OpenOrderPerTableConstraint = "ux_restaurant_orders_open_per_table";
+    private const string IdempotencyKeyPrimaryKeyConstraint = "order_idempotency_keys_pkey";
+
+    public async Task AddAsync(Order order, string? idempotencyKey, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        using var transaction = connection.BeginTransaction();
 
-        const string sql = """
+        const string insertOrderSql = """
             INSERT INTO restaurant.orders (id, tenant_id, table_id, status, created_at, created_by_user_id)
             VALUES (@Id, @TenantId, @TableId, @Status, @CreatedAt, @CreatedByUserId);
             """;
 
+        const string insertIdempotencySql = """
+            INSERT INTO restaurant.order_idempotency_keys (tenant_id, idempotency_key, table_id, order_id)
+            VALUES (@TenantId, @IdempotencyKey, @TableId, @OrderId);
+            """;
+
         try
         {
-            await connection.ExecuteAsync(sql, new
+            await connection.ExecuteAsync(insertOrderSql, new
             {
                 order.Id,
                 order.TenantId,
@@ -41,13 +50,35 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
                 Status = order.Status.ToString(),
                 order.CreatedAt,
                 order.CreatedByUserId,
-            });
+            }, transaction);
+
+            if (idempotencyKey is { Length: > 0 })
+            {
+                await connection.ExecuteAsync(insertIdempotencySql, new
+                {
+                    order.TenantId,
+                    IdempotencyKey = idempotencyKey,
+                    order.TableId,
+                    OrderId = order.Id,
+                }, transaction);
+            }
+
+            transaction.Commit();
         }
-        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation)
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == OpenOrderPerTableConstraint)
         {
             // The ux_restaurant_orders_open_per_table partial unique index is the authoritative
             // guarantee of BR2 under concurrent requests (see 0002_restaurant_orders.sql).
+            transaction.Rollback();
             throw new TableAlreadyHasOpenOrderException(order.TableId);
+        }
+        catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == IdempotencyKeyPrimaryKeyConstraint)
+        {
+            // A concurrent request committed this idempotency key first. Roll back this order
+            // entirely (it must not be left orphaned without its key) and let the caller replay
+            // against the winning record instead (BR6).
+            transaction.Rollback();
+            throw new IdempotencyKeyRaceLostException(idempotencyKey!);
         }
     }
 

@@ -24,6 +24,12 @@ public static class TestJwtTokenFactory
         };
         claims.AddRange(permissions.Select(p => new Claim(JwtAuthenticationSetup.PermissionClaimType, p)));
 
+        return CreateToken(claims);
+    }
+
+    /// <summary>Builds a validly signed token from arbitrary claims, to exercise the "signed but missing/malformed required claims" case (see JwtAuthenticationSetup.OnTokenValidated).</summary>
+    public static string CreateToken(IEnumerable<Claim> claims)
+    {
         var key = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(SigningKey));
         var credentials = new SigningCredentials(key, SecurityAlgorithms.HmacSha256);
 

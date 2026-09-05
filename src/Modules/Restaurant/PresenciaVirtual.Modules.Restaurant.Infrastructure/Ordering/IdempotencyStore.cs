@@ -18,16 +18,4 @@ public sealed class IdempotencyStore(ITenantDbConnectionFactory connectionFactor
 
         return await connection.QuerySingleOrDefaultAsync<IdempotencyRecord>(sql, new { tenantId, idempotencyKey });
     }
-
-    public async Task SaveAsync(Guid tenantId, string idempotencyKey, Guid tableId, Guid orderId, CancellationToken cancellationToken = default)
-    {
-        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
-
-        const string sql = """
-            INSERT INTO restaurant.order_idempotency_keys (tenant_id, idempotency_key, table_id, order_id)
-            VALUES (@tenantId, @idempotencyKey, @tableId, @orderId);
-            """;
-
-        await connection.ExecuteAsync(sql, new { tenantId, idempotencyKey, tableId, orderId });
-    }
 }

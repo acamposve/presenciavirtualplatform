@@ -78,12 +78,18 @@ public class CreateOrderHandlerTests
     private static CreateOrderHandler CreateHandler(
         IEnumerable<Guid> existingTables,
         FakeOrderRepository? orderRepository = null)
-        => new(
+    {
+        // Mirrors OrderRepository.AddAsync persisting the order and its idempotency record
+        // together: both fakes share one backing store instead of each keeping their own.
+        var idempotencyRegistry = new Dictionary<(Guid TenantId, string Key), IdempotencyRecord>();
+
+        return new(
             new FakeTableRepository(existingTables, TenantId),
-            orderRepository ?? new FakeOrderRepository(),
-            new FakeIdempotencyStore(),
+            orderRepository ?? new FakeOrderRepository(idempotencyRegistry),
+            new FakeIdempotencyStore(idempotencyRegistry),
             new FakeCurrentUserContext(TenantId, UserId),
             new FixedTimeProvider(Now));
+    }
 
     private sealed class FakeTableRepository(IEnumerable<Guid> existingTableIds, Guid tenantId) : ITableRepository
     {
@@ -93,23 +99,35 @@ public class CreateOrderHandlerTests
             => Task.FromResult(tenantIdArg == tenantId && _existingTableIds.Contains(tableId));
     }
 
-    private sealed class FakeOrderRepository : IOrderRepository
+    private sealed class FakeOrderRepository(Dictionary<(Guid TenantId, string Key), IdempotencyRecord>? idempotencyRegistry = null) : IOrderRepository
     {
         private readonly List<Order> _orders = [];
+        private readonly Dictionary<(Guid TenantId, string Key), IdempotencyRecord> _idempotencyRegistry = idempotencyRegistry ?? [];
 
         public void Seed(Order order) => _orders.Add(order);
 
         public Task<bool> HasOpenOrderAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default)
             => Task.FromResult(_orders.Any(o => o.TenantId == tenantId && o.TableId == tableId && o.Status == OrderStatus.Open));
 
-        public Task AddAsync(Order order, CancellationToken cancellationToken = default)
+        public Task AddAsync(Order order, string? idempotencyKey, CancellationToken cancellationToken = default)
         {
             if (_orders.Any(o => o.TenantId == order.TenantId && o.TableId == order.TableId && o.Status == OrderStatus.Open))
             {
                 throw new TableAlreadyHasOpenOrderException(order.TableId);
             }
 
+            if (idempotencyKey is { Length: > 0 } && _idempotencyRegistry.ContainsKey((order.TenantId, idempotencyKey)))
+            {
+                throw new IdempotencyKeyRaceLostException(idempotencyKey);
+            }
+
             _orders.Add(order);
+
+            if (idempotencyKey is { Length: > 0 })
+            {
+                _idempotencyRegistry[(order.TenantId, idempotencyKey)] = new IdempotencyRecord(order.Id, order.TableId);
+            }
+
             return Task.CompletedTask;
         }
 
@@ -117,18 +135,10 @@ public class CreateOrderHandlerTests
             => Task.FromResult(_orders.SingleOrDefault(o => o.TenantId == tenantId && o.Id == orderId));
     }
 
-    private sealed class FakeIdempotencyStore : IIdempotencyStore
+    private sealed class FakeIdempotencyStore(Dictionary<(Guid TenantId, string Key), IdempotencyRecord> records) : IIdempotencyStore
     {
-        private readonly Dictionary<(Guid TenantId, string Key), IdempotencyRecord> _records = [];
-
         public Task<IdempotencyRecord?> FindAsync(Guid tenantId, string idempotencyKey, CancellationToken cancellationToken = default)
-            => Task.FromResult(_records.GetValueOrDefault((tenantId, idempotencyKey)));
-
-        public Task SaveAsync(Guid tenantId, string idempotencyKey, Guid tableId, Guid orderId, CancellationToken cancellationToken = default)
-        {
-            _records[(tenantId, idempotencyKey)] = new IdempotencyRecord(orderId, tableId);
-            return Task.CompletedTask;
-        }
+            => Task.FromResult(records.GetValueOrDefault((tenantId, idempotencyKey)));
     }
 
     private sealed class FakeCurrentUserContext(Guid tenantId, Guid userId) : ICurrentUserContext

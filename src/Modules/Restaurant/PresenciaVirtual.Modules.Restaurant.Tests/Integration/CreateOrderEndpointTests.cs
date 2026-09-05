@@ -79,6 +79,21 @@ public class CreateOrderEndpointTests(ApiFixture fixture) : IClassFixture<ApiFix
     }
 
     [Fact]
+    public async Task AC5_TokenSignedButMissingTenantIdClaim_ReturnsUnauthorizedNotServerError()
+    {
+        // Regression test: a validly signed token missing a required claim must fail
+        // authentication itself (401), not throw past it into a 500 (JwtAuthenticationSetup's
+        // OnTokenValidated).
+        var token = TestJwtTokenFactory.CreateToken([new System.Security.Claims.Claim("sub", Guid.NewGuid().ToString())]);
+        using var client = fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", token);
+
+        var response = await client.PostAsJsonAsync(Endpoint, new { tableId = Guid.NewGuid() });
+
+        Assert.Equal(HttpStatusCode.Unauthorized, response.StatusCode);
+    }
+
+    [Fact]
     public async Task AC6_TableDoesNotExist_ReturnsNotFound()
     {
         var tenantId = Guid.NewGuid();
@@ -151,6 +166,53 @@ public class CreateOrderEndpointTests(ApiFixture fixture) : IClassFixture<ApiFix
 
         Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Created);
         Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Concurrency_ReusingTheSameIdempotencyKeyForDifferentTablesAtTheSameTime_OneWinsAndTheOtherIsRejected()
+    {
+        // Regression test for the race Copilot flagged: order creation and the idempotency
+        // record must commit atomically, so a losing concurrent request rolls back its own
+        // order entirely instead of leaving an orphaned order or crashing with a 500.
+        var tenantId = Guid.NewGuid();
+        var tableA = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantId);
+        var tableB = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantId);
+        using var clientA = AuthenticatedClient(tenantId, Guid.NewGuid(), CreatePermission);
+        using var clientB = AuthenticatedClient(tenantId, Guid.NewGuid(), CreatePermission);
+        var requestA = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = JsonContent.Create(new { tableId = tableA }),
+            Headers = { { "Idempotency-Key", "raced-key" } },
+        };
+        var requestB = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = JsonContent.Create(new { tableId = tableB }),
+            Headers = { { "Idempotency-Key", "raced-key" } },
+        };
+
+        var responses = await Task.WhenAll(clientA.SendAsync(requestA), clientB.SendAsync(requestB));
+
+        Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Created);
+        Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Validation_MultipleErrorsAtOnce_ReturnsBadRequestInsteadOfThrowing()
+    {
+        // Regression test: ToDictionary(_ => "request", ...) throws ArgumentException (duplicate
+        // key) as soon as there is more than one validation error. Trigger two at once:
+        // an empty tableId and an oversized Idempotency-Key.
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, Guid.NewGuid(), CreatePermission);
+        var request = new HttpRequestMessage(HttpMethod.Post, Endpoint)
+        {
+            Content = JsonContent.Create(new { tableId = Guid.Empty }),
+            Headers = { { "Idempotency-Key", new string('k', 201) } },
+        };
+
+        var response = await client.SendAsync(request);
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
     private HttpClient AuthenticatedClient(Guid tenantId, Guid userId, params string[] permissions)

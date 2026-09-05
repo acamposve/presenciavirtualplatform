@@ -8,3 +8,11 @@ public sealed class TableAlreadyHasOpenOrderException(Guid tableId) : Exception(
 
 /// <summary>AC8/BR6: the idempotency key was already used for a different request.</summary>
 public sealed class IdempotencyKeyConflictException(string idempotencyKey) : Exception($"Idempotency key '{idempotencyKey}' was already used for a different request.");
+
+/// <summary>
+/// BR6: a concurrent request committed the same idempotency key first. The order just built
+/// by this request was rolled back (never persisted); the caller must re-check
+/// <see cref="IIdempotencyStore"/> for the winning record and replay/reject accordingly,
+/// exactly as it would have if that record had existed from the start.
+/// </summary>
+public sealed class IdempotencyKeyRaceLostException(string idempotencyKey) : Exception($"Idempotency key '{idempotencyKey}' was committed by a concurrent request.");

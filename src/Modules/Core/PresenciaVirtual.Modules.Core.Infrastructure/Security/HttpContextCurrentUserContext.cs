@@ -7,6 +7,12 @@ namespace PresenciaVirtual.Modules.Core.Infrastructure.Security;
 /// Resolves the current tenant/user/permissions from the authenticated request's claims.
 /// The tenant is always read from the validated token — never from client-supplied input
 /// (ADR 0002 rule 3).
+///
+/// A token missing or malformed the required claims is already rejected by authentication
+/// itself (see JwtAuthenticationSetup's OnTokenValidated), which fails the request with 401
+/// before this class is ever constructed. The checks below are therefore a defensive
+/// invariant, not a normal 4xx path — reaching them would indicate a bug upstream, not a
+/// malformed client request.
 /// </summary>
 public sealed class HttpContextCurrentUserContext : ICurrentUserContext
 {

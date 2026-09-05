@@ -39,6 +39,28 @@ public static class JwtAuthenticationSetup
                     ValidateIssuerSigningKey = true,
                     IssuerSigningKey = new SymmetricSecurityKey(Encoding.UTF8.GetBytes(signingKey)),
                 };
+
+                // A correctly signed token is not necessarily a usable one: it must also carry
+                // the claims CreateOrder's security requirements depend on. Rejecting it here
+                // fails authentication itself (401), so HttpContextCurrentUserContext can safely
+                // assume both claims are present and parsable — rather than throwing past
+                // authorization and surfacing as a 500.
+                options.Events = new JwtBearerEvents
+                {
+                    OnTokenValidated = context =>
+                    {
+                        var principal = context.Principal;
+                        var tenantId = principal?.FindFirst(TenantIdClaimType)?.Value;
+                        var userId = principal?.FindFirst("sub")?.Value;
+
+                        if (!Guid.TryParse(tenantId, out _) || !Guid.TryParse(userId, out _))
+                        {
+                            context.Fail($"The token must carry a valid '{TenantIdClaimType}' claim and a valid 'sub' claim, both parsable as GUIDs.");
+                        }
+
+                        return Task.CompletedTask;
+                    },
+                };
             });
 
         return services;
