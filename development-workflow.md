@@ -16,7 +16,10 @@ feature/retail-inventory-adjustment
 feature/academy-student-enrollment
 fix/<short-description>
 docs/<short-description>
+chore/<short-description>
 ```
+
+`chore/` is for technical work with no direct business-capability owner (solution scaffolding, tooling, CI configuration) — it still requires a pull request like any other change.
 
 ## Pull Requests
 
