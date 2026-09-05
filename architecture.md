@@ -1,8 +1,10 @@
 # Presencia Virtual Platform — Architecture
 
-**Version:** 1.0  
+**Version:** 1.1  
 **Status:** Approved  
 **Last Updated:** 2026-09-05
+
+> Amended 2026-09-05 per [ADR 0001](docs/adr/0001-tenant-vertical-organization-location-model.md) (tenant/vertical cardinality, Organization/Location model), [ADR 0002](docs/adr/0002-tenant-isolation-strategy.md) (tenant isolation strategy), [ADR 0003](docs/adr/0003-platform-billing-vs-vertical-payments.md) (Platform Billing vs. vertical Payments), and [ADR 0004](docs/adr/0004-data-lifecycle-and-retention-policy-placeholder.md) (data lifecycle placeholder). Affected sections: §5.1, §5.3, §5.4, §19, §34.
 
 ---
 
@@ -174,8 +176,10 @@ Core contains capabilities shared across the platform.
 
 Examples:
 
-- Organizations
-- Tenants
+- Tenants (platform-level security, ownership and billing boundary)
+- Tenant Vertical Activation (which verticals — Restaurant, Retail, Academy — a Tenant has enabled; a Tenant MAY activate one or several simultaneously — see [ADR 0001](docs/adr/0001-tenant-vertical-organization-location-model.md))
+- Organizations (optional business structure inside a Tenant — see §19.2)
+- Locations (structural identity of a physical location/branch; owned by Core, consumed by verticals for their own operational concepts — see §19.2)
 - Users
 - Identity
 - Authentication
@@ -186,7 +190,7 @@ Examples:
 - Notifications
 - Configuration
 - Files
-- Billing
+- Platform Billing (Presencia Virtual → Tenant: subscription, plan, usage, entitlement, platform invoice — see [ADR 0003](docs/adr/0003-platform-billing-vs-vertical-payments.md); distinct from each vertical's own "Payments" capability)
 - Platform-level AI capabilities where appropriate
 
 Core must remain focused.
@@ -254,7 +258,6 @@ Potential capabilities include:
 - Cash Registers
 - Returns
 - Stock Transfers
-- Multi-branch operations
 - Offline operation and synchronization
 
 Example:
@@ -270,9 +273,10 @@ Retail
 ├── Customers
 ├── Promotions
 ├── Cash
-├── Returns
-└── Branches
+└── Returns
 ```
+
+Multi-location operation is not modeled as a Retail-specific "Branches" capability: the structural identity of a location is owned by Core (`Organization` / `Location`, see §19.2), while Retail owns only its own operational data per location (store inventory, cash register, POS configuration) — see [ADR 0001](docs/adr/0001-tenant-vertical-organization-location-model.md).
 
 Offline operation is a potential architectural capability but must be specified before implementation.
 
@@ -296,8 +300,6 @@ Potential capabilities include:
 - Certificates
 - Payments
 - Communications
-- Student portal
-- Teacher portal
 
 Example:
 
@@ -314,6 +316,8 @@ Academy
 ├── Certificates
 └── Payments
 ```
+
+"Student portal" and "Teacher portal" are NOT modeled as business capabilities or as a bounded context/module. They are presentation/delivery surfaces that compose existing Academy capabilities (e.g. a student portal reads from Enrollment, Scheduling, Attendance, Evaluation, Certificates, Communications and tuition information; a teacher portal reads from Course Management, Class/Section Management, Scheduling, Attendance, Evaluation and Communications). No "Portal" module should be created.
 
 ---
 
@@ -750,7 +754,15 @@ Real-time functionality should only be introduced when required by a specificati
 
 The platform is designed as a multi-tenant system.
 
-Conceptually:
+Every tenant-owned resource must have an unambiguous tenant boundary.
+
+Tenant isolation is a security requirement.
+
+The application must never trust a tenant identifier supplied by a client without validating it against the authenticated user's context.
+
+## 19.1 Tenant and Vertical Activation
+
+A Tenant MAY activate one or multiple verticals simultaneously. The diagram below is illustrative of the range of valid configurations, not a 1:1 constraint:
 
 ```text
 Platform
@@ -761,17 +773,44 @@ Platform
 │
 ├── Tenant B
 │   ├── Retail
+│   ├── Academy
 │   └── Users
 │
 └── Tenant C
-    └── Academy
+    ├── Restaurant
+    ├── Retail
+    ├── Academy
+    └── Users
 ```
 
-Every tenant-owned resource must have an unambiguous tenant boundary.
+Which verticals are active for a Tenant is explicit, tenant-scoped state owned by Core (Tenant Vertical Activation), not a separate "Vertical Tenant" abstraction. See [ADR 0001](docs/adr/0001-tenant-vertical-organization-location-model.md).
 
-Tenant isolation is a security requirement.
+## 19.2 Organization and Location
 
-The application must never trust a tenant identifier supplied by a client without validating it against the authenticated user's context.
+A Tenant MAY optionally structure itself with one or more Organizations, and an Organization MAY contain one or more Locations/Branches:
+
+```text
+Tenant
+└── Organization (optional)
+    └── Location / Branch
+
+Tenant
+└── Vertical data directly   (no Organization required)
+```
+
+- Organization is a business/organizational structure inside a Tenant. It is NOT a security boundary and is NOT independently billed.
+- Core owns the structural identity of `Organization` and `Location`. Each vertical owns its own operational concepts associated with a Location (e.g. Restaurant's Tables and Kitchen, Retail's store inventory and POS configuration, Academy's classrooms and facilities) — Core does not model vertical-specific behavior.
+- Every record, whether or not it sits under an Organization/Location, still resolves to exactly one Tenant.
+
+See [ADR 0001](docs/adr/0001-tenant-vertical-organization-location-model.md) for full rationale.
+
+## 19.3 Tenant Isolation Strategy
+
+Tenant isolation is enforced through two complementary layers: application-level tenant enforcement as the primary mechanism, and PostgreSQL Row-Level Security (RLS) as defense-in-depth. Platform administrators do not automatically bypass isolation; cross-tenant access requires an explicit, audited operation. See [ADR 0002](docs/adr/0002-tenant-isolation-strategy.md) for the complete strategy and its rules — it MUST be read before implementing any tenant-owned table.
+
+## 19.4 Data Lifecycle
+
+The platform must eventually support tenant-aware data retention, deletion/anonymization, and auditability of destructive operations. Detailed retention periods and deletion semantics are not yet defined and must be established before production launch of capabilities handling personal data at scale (notably Academy and Restaurant/Retail Customer Management). See [ADR 0004](docs/adr/0004-data-lifecycle-and-retention-policy-placeholder.md).
 
 ---
 
@@ -1205,6 +1244,8 @@ IEmailService
     ↓
 Email Provider
 ```
+
+`IPaymentProvider` is a shared **infrastructure** abstraction only. It MUST NOT become a shared business/domain model: each vertical's Payments capability (Restaurant order payment, Retail sale payment, Academy tuition payment) owns its own domain logic and merely calls this contract to execute a transaction. It is also distinct from Core's Platform Billing capability, which is Presencia Virtual's own subscription relationship with the Tenant. See [ADR 0003](docs/adr/0003-platform-billing-vs-vertical-payments.md).
 
 External provider SDKs must not spread throughout the business codebase.
 

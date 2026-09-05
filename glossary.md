@@ -15,7 +15,11 @@ New terms MUST be added here when a specification introduces a domain concept fo
 
 | Term | Definition |
 |---|---|
-| Tenant | An independent business organization using the platform. The primary security and data-ownership boundary. |
+| Tenant | The platform-level security, ownership, and billing boundary. An independent business using the platform. Every tenant-owned record ultimately belongs to exactly one Tenant. See [ADR 0001](docs/adr/0001-tenant-vertical-organization-location-model.md). |
+| Vertical | One of the platform's business domains available to a Tenant — `Restaurant`, `Retail`, or `Academy`. A Tenant MAY activate one or several verticals simultaneously (Tenant Vertical Activation). |
+| Organization | An optional business/organizational structure inside a Tenant, which MAY contain one or more Locations. Not a security boundary and not independently billed. See [ADR 0001](docs/adr/0001-tenant-vertical-organization-location-model.md). |
+| Location / Branch | A physical location or branch belonging to a Tenant (optionally grouped under an Organization). Core owns its structural identity; each vertical owns its own operational data associated with a Location (e.g. a restaurant's tables, a store's inventory). |
+| Platform Billing | Core's capability covering the Presencia Virtual → Tenant commercial relationship (subscription, plan, usage, entitlement, platform invoice). Distinct from a vertical's own "Payments" capability. See [ADR 0003](docs/adr/0003-platform-billing-vs-vertical-payments.md). |
 | Bounded Context | A business domain with an explicit boundary and its own ubiquitous language (`Core`, `Restaurant`, `Retail`, `Academy`). |
 | Module | The implementation unit corresponding to a bounded context within the modular monolith. |
 | Vertical Slice | An end-to-end implementation of a single use case, containing everything needed to fulfill it. |
