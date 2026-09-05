@@ -1,0 +1,65 @@
+## .NET / Visual Studio / Rider
+bin/
+obj/
+out/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+.vs/
+.vscode/*
+!.vscode/extensions.json
+*.dbmdl
+*.jfm
+*.pdb
+*.cache
+*.dll
+*.exe
+[Dd]ebug/
+[Rr]elease/
+[Ll]og/
+[Ll]ogs/
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+.idea/
+
+## Secrets / configuration
+*.env
+.env.*
+!.env.example
+appsettings.Development.json
+appsettings.*.local.json
+secrets.json
+*.pfx
+*.pem
+*.key
+
+## Node / React / Vite frontend
+node_modules/
+dist/
+dist-ssr/
+build/
+.vite/
+.turbo/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.pnpm-store/
+coverage/
+
+## Docker
+*.env.docker
+
+## OS
+.DS_Store
+Thumbs.db
+desktop.ini
+
+## Misc
+*.log
+*.tmp
+*.bak
+*.swp
