@@ -26,7 +26,7 @@ CreateOrder → AddItem → (Kitchen) → CloseOrder → Payment
 
 This specification covers only adding an item to an already-open order. `RemoveItem`, `CancelOrder`, `CloseOrder`, kitchen routing, and payment remain separate, not-yet-written specifications, exactly as `create-order.md` already stated.
 
-This use case assumes a **menu item** already exists for the tenant, identified by `MenuItemId` with a name and a price. Full Menu Management (creating/editing menu items, categories, availability) is out of scope — the same relationship `create-order.md` had with Table Management before [`create-table.md`](../tables/create-table.md) existed. Unlike that precedent, this specification does not defer the minimal schema: since no menu capability exists at all yet, this specification introduces the smallest possible `restaurant.menu_items` reference schema (id, tenant, name, price) needed to make `AddItem` real, the same way `create-order.md` introduced a minimal `restaurant.tables` schema for `CreateOrder`.
+This use case assumes a **menu item** already exists for the tenant, identified by `MenuItemId` with a name, a price, and whether it is alcoholic. Full Menu Management (creating/editing menu items, categories, availability) is out of scope — the same relationship `create-order.md` had with Table Management before [`create-table.md`](../tables/create-table.md) existed. Unlike that precedent, this specification does not defer the minimal schema: since no menu capability exists at all yet, this specification introduces the smallest possible `restaurant.menu_items` reference schema needed to make `AddItem` real, the same way `create-order.md` introduced a minimal `restaurant.tables` schema for `CreateOrder`.
 
 ## Functional Requirements
 
@@ -38,6 +38,7 @@ This use case assumes a **menu item** already exists for the tenant, identified 
 6. The system MUST recompute the order's total to include the newly added item.
 7. The system MUST return the order's current items and total after the item is added.
 8. The system MUST support an optional `Idempotency-Key` request header, with the same semantics as `CreateOrder`'s (FR7/BR6 in `create-order.md`): a repeated request with the same key returns the original result instead of adding the item again.
+9. If the menu item is marked alcoholic, the system MUST reject the request if adding it would bring that line's quantity above the tenant's configured limit, when one is configured.
 
 ## Non-Functional Requirements
 
@@ -51,9 +52,11 @@ This use case assumes a **menu item** already exists for the tenant, identified 
 - **BR1:** An item can only be added to an Order whose status is `Open`. (Only `Open` exists today; this rule anticipates `CloseOrder`/`CancelOrder` introducing other statuses.)
 - **BR2:** `Quantity` MUST be a positive integer (at least 1).
 - **BR3:** An added item's unit price is fixed at the price the referenced menu item had at the moment it was added ("price snapshot"). A later change to the menu item's price MUST NOT retroactively change already-added items.
-- **BR4:** Each `AddItem` call creates its own line item; it does **not** merge into an existing line for the same menu item on the same order — see Open Questions.
+- **BR4:** Adding a menu item that already has a line on the order increases that line's `Quantity` by the newly requested amount rather than creating a second line for the same `MenuItemId`. Adding a *different* menu item always creates its own line. (Resolved from Open Questions: e.g. adding a Coke twice results in one line with quantity 2; adding a Coke and then a dessert results in two lines.)
+  - The merged line's `UnitPriceSnapshot` does not change on a merge — it stays whatever it was when the line was first created (BR3). A quantity added later, even if the menu item's price has since changed, is priced at the line's original snapshot, not re-priced. This keeps one line at one consistent unit price rather than needing a weighted average.
 - **BR5:** The order's `Total` is always the sum of all its items' line totals (`Quantity × UnitPriceSnapshot`).
-- **BR6:** An `Idempotency-Key`, when supplied, uniquely identifies a single logical add-item attempt within a tenant and order. Replaying it MUST NOT add the item twice. Reusing a key with a different request (different `OrderId`, `MenuItemId`, or `Quantity`) MUST be rejected rather than silently accepted.
+- **BR6:** An `Idempotency-Key`, when supplied, uniquely identifies a single logical add-item attempt within a tenant and order. Replaying it MUST NOT add the item twice (nor increase the merged line's quantity twice). Reusing a key with a different request (different `OrderId`, `MenuItemId`, or `Quantity`) MUST be rejected rather than silently accepted.
+- **BR7:** A menu item MAY be marked `IsAlcoholic`. A tenant MAY configure a maximum quantity per line for alcoholic items (`MaxAlcoholicItemQuantityPerLine`). When configured, the *resulting* quantity of an alcoholic item's line (after merging, per BR4) MUST NOT exceed it. When not configured for a tenant, no limit is enforced. The specific limit is a business/legal decision for each tenant to set, not a value this specification fixes.
 
 ## Acceptance Criteria
 
@@ -67,14 +70,20 @@ This use case assumes a **menu item** already exists for the tenant, identified 
 - **AC8 — Idempotent replay:** Given a prior successful add-item request with `Idempotency-Key: K`, when the same request (same `OrderId`, `MenuItemId`, `Quantity`) is repeated with the same key, then the system returns the same result without adding the item again.
 - **AC9 — Idempotency key reuse conflict:** Given a prior successful add-item request with `Idempotency-Key: K`, when a new request reuses key `K` with a different `OrderId`, `MenuItemId`, or `Quantity`, then the request is rejected as a Conflict.
 - **AC10 — Price snapshot:** Given a menu item priced at $10 when added to an order, when the menu item's price later changes to $12 (however that happens — out of scope here), then the order's existing line item and total still reflect $10.
+- **AC11 — Merging the same menu item:** Given an order that already has a line for a menu item with quantity 1, when the same menu item is added again with quantity 1, then the order ends up with a single line for that menu item at quantity 2, not two separate lines.
+- **AC12 — Distinct menu items stay separate:** Given an order with a line for menu item A, when menu item B is added, then the order has two lines, one per menu item.
+- **AC13 — Alcoholic item within the configured limit:** Given a tenant with `MaxAlcoholicItemQuantityPerLine` configured to N, and an order with an alcoholic item's line at a quantity below N, when enough of that item is added to reach exactly N, then the request succeeds.
+- **AC14 — Alcoholic item over the configured limit:** Given the same setup as AC13, when adding more would bring the line's quantity above N, then the request is rejected as Conflict and the line's quantity is unchanged.
+- **AC15 — No configured limit:** Given a tenant with no `MaxAlcoholicItemQuantityPerLine` configured, when an alcoholic item is added in any quantity, then the request succeeds (no cap is enforced).
 
 ## Domain Concepts
 
-- **OrderItem** (new) — a line item on an `Order`: `OrderItemId`, `OrderId`, `MenuItemId`, `Quantity`, `UnitPriceSnapshot`, `LineTotal` (`Quantity × UnitPriceSnapshot`).
-- **MenuItem** (new, minimal reference concept — not a full Menu Management aggregate) — `MenuItemId`, `TenantId`, `Name`, `Price`.
+- **OrderItem** (new) — a line item on an `Order`: `OrderItemId`, `OrderId`, `MenuItemId`, `Quantity`, `UnitPriceSnapshot`, `LineTotal` (`Quantity × UnitPriceSnapshot`). At most one `OrderItem` per (`OrderId`, `MenuItemId`) pair, per BR4.
+- **MenuItem** (new, minimal reference concept — not a full Menu Management aggregate) — `MenuItemId`, `TenantId`, `Name`, `Price`, `IsAlcoholic`.
+- **RestaurantSettings** (new, minimal reference concept — not a full Restaurant configuration aggregate) — one row per tenant: `TenantId`, `MaxAlcoholicItemQuantityPerLine` (nullable; absent/null means no limit). Configuring this is out of scope (see Out of Scope) — for now a tenant without a row is treated as having no limit.
 - **Order** (existing, extended) — gains a collection of `OrderItem`s; `Total` becomes the sum of its items' `LineTotal`s instead of a fixed zero (`create-order.md`'s own note: "Items and Total exist structurally but remain empty/zero until AddItem is specified").
 
-Add `OrderItem` and `MenuItem` to `glossary.md` under Restaurant once this specification is approved, and update the existing `Order` entry to reflect that it now owns items.
+Add `OrderItem`, `MenuItem`, and `RestaurantSettings` to `glossary.md` under Restaurant once this specification is approved, and update the existing `Order` entry to reflect that it now owns items.
 
 ## Security Requirements
 
@@ -93,6 +102,7 @@ Add `OrderItem` and `MenuItem` to `glossary.md` under Restaurant once this speci
 | `OrderId` does not exist, or belongs to a different tenant | 404 Not Found |
 | `MenuItemId` does not exist, or belongs to a different tenant | 404 Not Found |
 | Order exists but is not `Open` | 409 Conflict |
+| Adding this quantity would exceed the tenant's configured alcoholic-item limit for this line (BR7) | 409 Conflict |
 | `Idempotency-Key` reused with a different request | 409 Conflict |
 
 Internal implementation details MUST NOT be exposed in any error response, per `constitution.md` Article VIII and `architecture.md` §26.
@@ -101,8 +111,9 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 
 - **Reads:** the referenced Order and MenuItem, both scoped to the caller's tenant.
 - **Writes:** a new `OrderItem` row; the Order's `Total` is derived (computed from items at read time or maintained incrementally — an implementation choice, not a business rule) rather than independently settable.
-- This specification introduces a new, minimal `restaurant.menu_items` table (id, tenant_id, name, price, created_at) — analogous to `restaurant.tables`' role for `CreateOrder`. Full Menu Management (its own specification) will own creating/editing these rows; for now they may need to be seeded directly, the same way tables were before `create-table.md`.
-- A new `restaurant.order_items` table is required: id, tenant_id, order_id (FK), menu_item_id (FK), quantity, unit_price_snapshot, created_at.
+- This specification introduces a new, minimal `restaurant.menu_items` table (id, tenant_id, name, price, is_alcoholic, created_at) — analogous to `restaurant.tables`' role for `CreateOrder`. Full Menu Management (its own specification) will own creating/editing these rows; for now they may need to be seeded directly, the same way tables were before `create-table.md`.
+- A new `restaurant.order_items` table is required: id, tenant_id, order_id (FK), menu_item_id (FK), quantity, unit_price_snapshot, created_at. A uniqueness constraint on (tenant_id, order_id, menu_item_id) enforces BR4 (at most one line per menu item per order) under concurrent requests, the same way `create-order.md`'s partial unique index enforces BR2.
+- A new, minimal `restaurant.settings` table is required: tenant_id (PK), max_alcoholic_item_quantity_per_line (nullable). A tenant with no row is treated as having no limit (BR7). Populating this — and any API to manage it — is out of scope; for now it may need to be seeded directly, the same way tables and menu items are before their own management specifications exist.
 - Tenant isolation on all reads/writes MUST follow ADR 0002 (application-level scoping plus PostgreSQL RLS, including the `WITH CHECK` side for this insert, per the write-isolation testing gap found while reviewing `create-table.md`).
 - The idempotency mechanism reuses the same approach as `create-order.md` (a persisted key record); whether it is a shared table across Ordering use cases or a per-use-case table is an implementation decision, not a business rule.
 
@@ -115,8 +126,8 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 
 ## Testing Requirements
 
-- **Unit tests:** `Order.AddItem` invariants (BR1 status check, BR2 quantity validation, BR3 price snapshot, BR5 total recomputation).
-- **Integration tests:** AC1–AC10 above, executed against the real API and database, including:
+- **Unit tests:** `Order.AddItem` invariants (BR1 status check, BR2 quantity validation, BR3 price snapshot, BR4 merge-by-menu-item behavior including the "snapshot doesn't change on merge" rule, BR5 total recomputation, BR7 alcoholic-item limit enforcement and the no-limit-configured case).
+- **Integration tests:** AC1–AC15 above, executed against the real API and database, including:
   - Cross-tenant isolation for both the order lookup and the menu item lookup (read side, per ADR 0002 rule 8).
   - Write isolation for the new `restaurant.order_items` table (the `WITH CHECK` side of RLS), following the pattern established in `create-table.md`'s review (`AppRole_CannotInsertARowForAnotherTenant`).
   - Idempotency replay and conflict (AC8/AC9), following the same pattern as `create-order.md`.
@@ -126,12 +137,15 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 - `RemoveItem`, `CancelOrder`, `CloseOrder` (future Ordering specifications).
 - Full Menu Management (creating/editing menu items, categories, availability, images) — only the minimal reference schema is introduced here.
 - Kitchen routing/ticket generation in response to items being added.
-- Merging multiple `AddItem` calls for the same menu item into a single line (BR4 — see Open Questions).
-- Modifying an item's quantity after it has been added (that would be a distinct `UpdateItemQuantity` capability, not covered here).
+- Modifying or removing a line's quantity directly (that would be a distinct `UpdateItemQuantity`/`RemoveItem` capability; the only way to change a line's quantity in this specification is by adding more of the same menu item, which only ever increases it).
 - Discounts, promotions, or per-item modifiers/notes (e.g. "no onions").
+- Any API or UI to configure `RestaurantSettings` (including `MaxAlcoholicItemQuantityPerLine`) — a future "Restaurant Settings" specification. For now, a tenant's limit (if any) must be seeded directly.
+- A read/query capability to fetch an order by table (`GetOrder`/`GetOpenOrderForTable`) — resolved as needed (see Open Questions) but specified separately, since it is a distinct read capability keyed by `TableId` rather than something `AddItem` itself performs.
 
 ## Open Questions
 
-- Should adding the same menu item twice to the same order merge into one line (incrementing quantity) or always create a separate line (BR4's current default)? Separate lines is simpler to implement and matches "each add is its own action," but some POS systems consolidate. Revisit if real usage shows a preference.
-- Should there be a maximum quantity per line item? No business requirement identified yet.
-- Is a `GetOrder` read capability needed now that `AddItem`'s response returns the full order state, or does returning it inline from `AddItem` (and `CreateOrder`) cover the need until a dedicated query capability is justified?
+None remaining that block this specification. Resolved during review:
+
+- **Merge behavior (BR4):** adding the same menu item merges into its existing line (quantity increases); a different menu item always gets its own line.
+- **Alcoholic item quantity limit (BR7):** configurable per tenant rather than a fixed number this specification chooses. No configuration capability exists yet — a tenant without a configured value has no limit enforced.
+- **`GetOrder` is needed:** confirmed necessary because staff work multiple tables simultaneously and need to look up an order without already holding its `OrderId`. It must support lookup **by `TableId`** (the table's current open order), not only by `OrderId`. This is a separate capability from `AddItem` and will be written as its own specification next, following the same pattern `create-table.md` followed after `create-order.md`.
