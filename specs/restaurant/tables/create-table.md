@@ -49,7 +49,7 @@ Table labels are **not** required to be unique within a tenant in this version �
 
 ## Acceptance Criteria
 
-- **AC1 — Happy path:** Given an authenticated user with the `restaurant.tables.create` permission, when they create a table with a valid label, then a new Table is created and returned with the correct `TenantId`, `Label`, and a generated `TableId`.
+- **AC1 — Happy path:** Given an authenticated user with the `restaurant.tables.create` permission, when they create a table with a valid label, then a new Table is created, scoped to the caller's tenant, and the response contains a generated `TableId` and the given `Label` (per FR5 — `TenantId` is persisted and enforced server-side, per Security Requirements, but is not part of the response body, consistent with `CreateOrder`'s response shape).
 - **AC2 — Empty label:** Given a request with an empty or whitespace-only label, when the user attempts to create the table, then the request is rejected as a validation error and no Table is created.
 - **AC3 — Label too long:** Given a label longer than 100 characters, when the user attempts to create the table, then the request is rejected as a validation error and no Table is created.
 - **AC4 — Missing permission:** Given an authenticated user without the `restaurant.tables.create` permission, when they attempt to create a table, then the request is rejected as Forbidden and no Table is created.
@@ -59,7 +59,7 @@ Table labels are **not** required to be unique within a tenant in this version �
 
 - **Table** (already referenced by `create-order.md`, formalized here as an aggregate) — fields relevant to this specification: `TableId`, `TenantId`, `Label`, `CreatedAt`.
 
-`Table` is already listed in `glossary.md` under Restaurant (added when `create-order.md` was approved); no glossary changes are expected from this specification.
+`Table` is already listed in `glossary.md` under Restaurant (added when `create-order.md` was approved). Its definition previously said it was "owned by a separate, not-yet-written Table Management specification" — this specification is that capability's first increment, so the glossary entry has been updated accordingly as part of this change.
 
 ## Security Requirements
 
@@ -93,7 +93,8 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 ## Testing Requirements
 
 - **Unit tests:** Table aggregate creation invariants (BR2 — label required, length bound).
-- **Integration tests:** AC1–AC5 above, executed against the real API and database, including a tenant-isolation check consistent with ADR 0002 rule 8 (a table created by Tenant A must not be creatable/visible as Tenant B's).
+- **Integration tests:** AC1–AC5 above, executed against the real API and database.
+- **Tenant isolation (ADR 0002 rule 8):** `CreateTable` takes no table or tenant identifier as input and `GetTable`/`ListTables` are out of scope, so isolation cannot be exercised through the public API alone. Following the same pattern used for `CreateOrder` (`RowLevelSecurityTests`), verify directly through the application's least-privileged database role: a table created under Tenant A (via `CreateTable`) is not returned by a query scoped to Tenant B's tenant context, confirming Row-Level Security — not just application-level filtering — enforces the boundary.
 
 ## Out of Scope
 
