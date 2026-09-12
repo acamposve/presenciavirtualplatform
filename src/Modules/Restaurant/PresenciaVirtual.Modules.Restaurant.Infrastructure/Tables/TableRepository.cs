@@ -16,4 +16,16 @@ public sealed class TableRepository(ITenantDbConnectionFactory connectionFactory
 
         return await connection.ExecuteScalarAsync<bool>(sql, new { tableId, tenantId });
     }
+
+    public async Task AddAsync(Table table, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+
+        const string sql = """
+            INSERT INTO restaurant.tables (id, tenant_id, label, created_at)
+            VALUES (@Id, @TenantId, @Label, @CreatedAt);
+            """;
+
+        await connection.ExecuteAsync(sql, new { table.Id, table.TenantId, table.Label, table.CreatedAt });
+    }
 }

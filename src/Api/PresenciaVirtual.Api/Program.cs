@@ -9,6 +9,7 @@ using PresenciaVirtual.Modules.Restaurant.Infrastructure.Tables;
 using PresenciaVirtual.Modules.Restaurant.Ordering;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 using PresenciaVirtual.Modules.Restaurant.Tables;
+using PresenciaVirtual.Modules.Restaurant.Tables.CreateTable;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -17,7 +18,7 @@ builder.Services.AddHealthChecks();
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddPresenciaVirtualAuthentication(builder.Configuration);
-builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.orders.create"]));
+builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.orders.create", "restaurant.tables.create"]));
 
 builder.Services.AddScoped<ICurrentUserContext, HttpContextCurrentUserContext>();
 builder.Services.AddScoped<ITenantDbConnectionFactory, NpgsqlTenantDbConnectionFactory>();
@@ -27,6 +28,7 @@ builder.Services.AddScoped<ITableRepository, TableRepository>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<IIdempotencyStore, IdempotencyStore>();
 builder.Services.AddScoped<CreateOrderHandler>();
+builder.Services.AddScoped<CreateTableHandler>();
 
 var app = builder.Build();
 
@@ -66,6 +68,7 @@ app.MapHealthChecks("/health/ready");
 app.MapHealthChecks("/health");
 
 app.MapRestaurantOrderEndpoints();
+app.MapRestaurantTableEndpoints();
 
 app.Run();
 

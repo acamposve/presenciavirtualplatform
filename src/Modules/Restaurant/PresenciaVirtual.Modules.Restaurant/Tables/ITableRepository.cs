@@ -7,4 +7,6 @@ namespace PresenciaVirtual.Modules.Restaurant.Tables;
 public interface ITableRepository
 {
     Task<bool> ExistsForTenantAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default);
+
+    Task AddAsync(Table table, CancellationToken cancellationToken = default);
 }
