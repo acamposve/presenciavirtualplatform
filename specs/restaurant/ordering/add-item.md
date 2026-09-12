@@ -1,12 +1,12 @@
 # Specification: Ordering / AddItem
 
-**Status:** Draft — Pending Review
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Ordering
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
 **Last Updated:** 2026-09-12
 
-This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4.
+This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4. Approved after four rounds of review (business rules, tenant-consistency, and concurrency semantics for BR4/BR6/BR7); implementation is in [PR #9](https://github.com/acamposve/presenciavirtualplatform/pull/9).
 
 ---
 
