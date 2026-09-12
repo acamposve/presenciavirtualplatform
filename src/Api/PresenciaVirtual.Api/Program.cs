@@ -33,10 +33,23 @@ var app = builder.Build();
 if (app.Environment.IsDevelopment())
 {
     app.MapOpenApi();
+}
 
+// Runs in every environment, not just Development: a production instance starting against a
+// fresh database must not be left without its schema (see Program.cs history / PR review).
+// A dedicated migration step in CI/CD, run before the application starts, is the natural next
+// evolution once there is a real multi-instance deployment — not needed yet.
+{
     var connectionString = app.Configuration.GetConnectionString("Postgres")
         ?? throw new InvalidOperationException("Connection string 'Postgres' is not configured.");
-    SqlMigrationRunner.Run(connectionString, typeof(TableRepository).Assembly);
+    var appRolePassword = app.Configuration["Database:AppRole:Password"]
+        ?? throw new InvalidOperationException("Configuration value 'Database:AppRole:Password' is required.");
+
+    SqlMigrationRunner.Run(
+        connectionString,
+        new Dictionary<string, string> { ["AppRolePassword"] = appRolePassword },
+        typeof(SqlMigrationRunner).Assembly,
+        typeof(TableRepository).Assembly);
 }
 
 app.UseAuthentication();

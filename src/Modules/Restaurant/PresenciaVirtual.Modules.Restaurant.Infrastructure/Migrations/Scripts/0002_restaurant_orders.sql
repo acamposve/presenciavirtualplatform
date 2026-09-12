@@ -24,5 +24,6 @@ CREATE UNIQUE INDEX ux_restaurant_orders_open_per_table
 ALTER TABLE restaurant.orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE restaurant.orders FORCE ROW LEVEL SECURITY;
 
+-- See 0001_restaurant_tables.sql for why NULLIF is required here.
 CREATE POLICY tenant_isolation ON restaurant.orders
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);

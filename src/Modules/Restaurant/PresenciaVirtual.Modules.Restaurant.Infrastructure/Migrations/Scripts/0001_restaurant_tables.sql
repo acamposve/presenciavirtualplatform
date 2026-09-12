@@ -17,5 +17,11 @@ CREATE INDEX ix_restaurant_tables_tenant_id ON restaurant.tables (tenant_id);
 ALTER TABLE restaurant.tables ENABLE ROW LEVEL SECURITY;
 ALTER TABLE restaurant.tables FORCE ROW LEVEL SECURITY;
 
+-- NULLIF guards against a PostgreSQL quirk with custom GUCs: once "app.tenant_id" has been
+-- set at least once on a given backend connection, RESET reverts it to an empty string, not
+-- NULL (NULL only occurs if it was never touched at all on that connection) - and pooled
+-- connections are reused across requests, so "never touched" cannot be relied on. Without the
+-- NULLIF, an empty string fails to cast to uuid and the query errors instead of failing
+-- closed; with it, a missing/reset tenant context cleanly matches no rows.
 CREATE POLICY tenant_isolation ON restaurant.tables
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);

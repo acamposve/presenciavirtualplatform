@@ -15,5 +15,6 @@ CREATE TABLE restaurant.order_idempotency_keys
 ALTER TABLE restaurant.order_idempotency_keys ENABLE ROW LEVEL SECURITY;
 ALTER TABLE restaurant.order_idempotency_keys FORCE ROW LEVEL SECURITY;
 
+-- See 0001_restaurant_tables.sql for why NULLIF is required here.
 CREATE POLICY tenant_isolation ON restaurant.order_idempotency_keys
-    USING (tenant_id = current_setting('app.tenant_id', true)::uuid);
+    USING (tenant_id = NULLIF(current_setting('app.tenant_id', true), '')::uuid);

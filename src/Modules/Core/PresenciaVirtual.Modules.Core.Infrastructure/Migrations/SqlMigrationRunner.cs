@@ -10,13 +10,20 @@ namespace PresenciaVirtual.Modules.Core.Infrastructure.Migrations;
 /// </summary>
 public static class SqlMigrationRunner
 {
-    public static void Run(string connectionString, params Assembly[] scriptAssemblies)
+    public static void Run(string connectionString, IReadOnlyDictionary<string, string>? variables, params Assembly[] scriptAssemblies)
     {
         var builder = DeployChanges.To.PostgresqlDatabase(connectionString);
 
         foreach (var assembly in scriptAssemblies)
         {
             builder = builder.WithScriptsEmbeddedInAssembly(assembly);
+        }
+
+        if (variables is { Count: > 0 })
+        {
+            // Lets scripts reference $VariableName$ (e.g. the least-privilege app role's
+            // password) without hardcoding secrets into committed SQL — see 0000_app_role.sql.
+            builder = builder.WithVariables(variables.ToDictionary(kv => kv.Key, kv => kv.Value));
         }
 
         var upgrader = builder

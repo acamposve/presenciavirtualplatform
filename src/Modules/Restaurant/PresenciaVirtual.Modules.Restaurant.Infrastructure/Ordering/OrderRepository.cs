@@ -6,7 +6,7 @@ using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 
 namespace PresenciaVirtual.Modules.Restaurant.Infrastructure.Ordering;
 
-public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory) : IOrderRepository
+public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory, IIdempotencyStore idempotencyStore) : IOrderRepository
 {
     public async Task<bool> HasOpenOrderAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default)
     {
@@ -68,8 +68,26 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == OpenOrderPerTableConstraint)
         {
             // The ux_restaurant_orders_open_per_table partial unique index is the authoritative
-            // guarantee of BR2 under concurrent requests (see 0002_restaurant_orders.sql).
+            // guarantee of BR2 under concurrent requests (see 0002_restaurant_orders.sql). It
+            // fires before the idempotency insert below ever runs, so a same-table, same-key
+            // race lands here too, not in the IdempotencyKeyPrimaryKeyConstraint branch -
+            // without checking for that, BR6 would be violated (the loser would get a spurious
+            // 409 instead of replaying the winner). Re-check for a matching record (now
+            // committed, since the constraint only fires once the other transaction resolved)
+            // before concluding this is a genuine, unrelated conflict.
             transaction.Rollback();
+
+            if (idempotencyKey is { Length: > 0 })
+            {
+                var winner = await idempotencyStore.FindAsync(order.TenantId, idempotencyKey, cancellationToken);
+                if (winner is not null)
+                {
+                    throw winner.TableId == order.TableId
+                        ? new IdempotencyKeyRaceLostException(idempotencyKey)
+                        : new IdempotencyKeyConflictException(idempotencyKey);
+                }
+            }
+
             throw new TableAlreadyHasOpenOrderException(order.TableId);
         }
         catch (PostgresException ex) when (ex.SqlState == PostgresErrorCodes.UniqueViolation && ex.ConstraintName == IdempotencyKeyPrimaryKeyConstraint)

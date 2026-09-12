@@ -12,16 +12,33 @@ namespace PresenciaVirtual.Modules.Core.Infrastructure.Persistence;
 /// current authenticated tenant, so that Row-Level Security policies can enforce tenant
 /// isolation as defense-in-depth (ADR 0002). Application code must still filter every query
 /// by tenant explicitly — RLS is the second layer, not a replacement for it.
+///
+/// RLS does not apply to a PostgreSQL superuser or a role with BYPASSRLS, which is what the
+/// official Postgres image's own admin user (used to run migrations) has. This factory
+/// therefore connects as the separate, least-privileged "presenciavirtual_app" role created
+/// by 0000_app_role.sql, not the admin role, so RLS is actually enforced for application
+/// traffic — not just declared.
 /// </summary>
 public sealed class NpgsqlTenantDbConnectionFactory : ITenantDbConnectionFactory
 {
+    public const string AppRoleUsername = "presenciavirtual_app";
+
     private readonly string _connectionString;
     private readonly ICurrentUserContext _currentUserContext;
 
     public NpgsqlTenantDbConnectionFactory(IConfiguration configuration, ICurrentUserContext currentUserContext)
     {
-        _connectionString = configuration.GetConnectionString("Postgres")
+        var adminConnectionString = configuration.GetConnectionString("Postgres")
             ?? throw new InvalidOperationException("Connection string 'Postgres' is not configured.");
+        var appRolePassword = configuration["Database:AppRole:Password"]
+            ?? throw new InvalidOperationException("Configuration value 'Database:AppRole:Password' is required.");
+
+        var connectionStringBuilder = new NpgsqlConnectionStringBuilder(adminConnectionString)
+        {
+            Username = AppRoleUsername,
+            Password = appRolePassword,
+        };
+        _connectionString = connectionStringBuilder.ConnectionString;
         _currentUserContext = currentUserContext;
     }
 

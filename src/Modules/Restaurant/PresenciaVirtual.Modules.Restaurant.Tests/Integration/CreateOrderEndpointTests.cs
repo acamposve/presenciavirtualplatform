@@ -7,7 +7,8 @@ using Xunit;
 
 namespace PresenciaVirtual.Modules.Restaurant.Tests.Integration;
 
-public class CreateOrderEndpointTests(ApiFixture fixture) : IClassFixture<ApiFixture>
+[Collection(ApiCollection.Name)]
+public class CreateOrderEndpointTests(ApiFixture fixture)
 {
     private const string Endpoint = "/api/v1/restaurants/orders";
     private const string CreatePermission = "restaurant.orders.create";
@@ -166,6 +167,31 @@ public class CreateOrderEndpointTests(ApiFixture fixture) : IClassFixture<ApiFix
 
         Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Created);
         Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Conflict);
+    }
+
+    [Fact]
+    public async Task Concurrency_SameTableSameIdempotencyKeyAtTheSameTime_BothRequestsReplayTheSameOrder()
+    {
+        // Regression test: the ux_restaurant_orders_open_per_table constraint fires before the
+        // idempotency insert ever runs, so without re-checking for a matching idempotency
+        // record first, the loser of this exact race got a spurious 409 instead of replaying
+        // the winner's order (BR6/FR7).
+        var tenantId = Guid.NewGuid();
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantId);
+        using var clientA = AuthenticatedClient(tenantId, Guid.NewGuid(), CreatePermission);
+        using var clientB = AuthenticatedClient(tenantId, Guid.NewGuid(), CreatePermission);
+        HttpRequestMessage Request() => new(HttpMethod.Post, Endpoint)
+        {
+            Content = JsonContent.Create(new { tableId }),
+            Headers = { { "Idempotency-Key", "same-table-raced-key" } },
+        };
+
+        var responses = await Task.WhenAll(clientA.SendAsync(Request()), clientB.SendAsync(Request()));
+
+        Assert.Single(responses, r => r.StatusCode == HttpStatusCode.Created);
+        Assert.Single(responses, r => r.StatusCode == HttpStatusCode.OK);
+        var orderIds = await Task.WhenAll(responses.Select(async r => (await r.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("orderId").GetGuid()));
+        Assert.Equal(orderIds[0], orderIds[1]);
     }
 
     [Fact]

@@ -1,5 +1,7 @@
 using Microsoft.AspNetCore.Hosting;
 using Microsoft.AspNetCore.Mvc.Testing;
+using Npgsql;
+using PresenciaVirtual.Modules.Core.Infrastructure.Persistence;
 using Testcontainers.PostgreSql;
 using Xunit;
 
@@ -18,13 +20,23 @@ namespace PresenciaVirtual.Modules.Restaurant.Tests.Integration;
 /// </summary>
 public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
 {
+    public const string AppRolePassword = "integration-test-app-role-password";
+
     private readonly PostgreSqlContainer _postgres = new PostgreSqlBuilder("postgres:17")
         .WithDatabase("presenciavirtual_test")
         .WithUsername("presenciavirtual")
         .WithPassword("presenciavirtual")
         .Build();
 
+    /// <summary>Admin/superuser connection — bypasses RLS. Use only for test setup (seeding), never to exercise the behavior under test.</summary>
     public string ConnectionString => _postgres.GetConnectionString();
+
+    /// <summary>The same least-privilege role the application itself connects as, for tests that need to prove RLS independently of application-level filtering.</summary>
+    public string AppRoleConnectionString => new NpgsqlConnectionStringBuilder(_postgres.GetConnectionString())
+    {
+        Username = NpgsqlTenantDbConnectionFactory.AppRoleUsername,
+        Password = AppRolePassword,
+    }.ConnectionString;
 
     public async Task InitializeAsync()
     {
@@ -33,6 +45,7 @@ public sealed class ApiFixture : WebApplicationFactory<Program>, IAsyncLifetime
         Environment.SetEnvironmentVariable("ConnectionStrings__Postgres", _postgres.GetConnectionString());
         Environment.SetEnvironmentVariable("Authentication__Jwt__SigningKey", TestJwtTokenFactory.SigningKey);
         Environment.SetEnvironmentVariable("Authentication__Jwt__Issuer", TestJwtTokenFactory.Issuer);
+        Environment.SetEnvironmentVariable("Database__AppRole__Password", AppRolePassword);
 
         // WebApplicationFactory builds the host lazily on first use. Force it here so startup
         // migrations have already run before any test seeds data directly via SQL.
