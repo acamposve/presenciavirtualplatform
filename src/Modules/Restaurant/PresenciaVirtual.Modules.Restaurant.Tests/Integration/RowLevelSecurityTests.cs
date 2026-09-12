@@ -68,4 +68,24 @@ public class RowLevelSecurityTests(ApiFixture fixture)
 
         Assert.Equal(tableId, visibleId);
     }
+
+    [Fact]
+    public async Task AppRole_CannotInsertARowForAnotherTenant()
+    {
+        // specs/restaurant/tables/create-table.md's write-isolation requirement: CreateTable is
+        // the first write capability exercised against these policies, so this proves the
+        // WITH CHECK side of RLS (not just the read/USING side already covered above).
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => connection.ExecuteAsync(
+            "INSERT INTO restaurant.tables (id, tenant_id, label) VALUES (@id, @tenantId, 'Should be rejected');",
+            new { id = Guid.NewGuid(), tenantId = ownerTenantId }));
+
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
 }

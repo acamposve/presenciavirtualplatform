@@ -97,6 +97,12 @@ public class CreateOrderHandlerTests
 
         public Task<bool> ExistsForTenantAsync(Guid tenantIdArg, Guid tableId, CancellationToken cancellationToken = default)
             => Task.FromResult(tenantIdArg == tenantId && _existingTableIds.Contains(tableId));
+
+        public Task AddAsync(Table table, CancellationToken cancellationToken = default)
+        {
+            _existingTableIds.Add(table.Id);
+            return Task.CompletedTask;
+        }
     }
 
     private sealed class FakeOrderRepository(Dictionary<(Guid TenantId, string Key), IdempotencyRecord>? idempotencyRegistry = null) : IOrderRepository
