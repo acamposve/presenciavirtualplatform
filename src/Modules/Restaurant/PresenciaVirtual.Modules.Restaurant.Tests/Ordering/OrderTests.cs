@@ -69,9 +69,23 @@ public class OrderTests
     {
         var id = Guid.NewGuid();
 
-        var order = Order.Reconstruct(id, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
+        var order = Order.Reconstruct(id, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, items: []);
 
         Assert.Equal(id, order.Id);
         Assert.Equal(OrderStatus.Open, order.Status);
+    }
+
+    [Fact]
+    public void Reconstruct_DerivesTotalFromTheGivenItems()
+    {
+        var items = new[]
+        {
+            new OrderItem(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 2, 3m),
+            new OrderItem(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 1, 4m),
+        };
+
+        var order = Order.Reconstruct(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, items);
+
+        Assert.Equal(10m, order.Total);
     }
 }

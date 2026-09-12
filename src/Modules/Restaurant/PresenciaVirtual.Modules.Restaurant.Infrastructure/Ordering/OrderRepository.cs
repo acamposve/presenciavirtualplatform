@@ -6,7 +6,7 @@ using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 
 namespace PresenciaVirtual.Modules.Restaurant.Infrastructure.Ordering;
 
-public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory, IIdempotencyStore idempotencyStore) : IOrderRepository
+public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory, IIdempotencyStore idempotencyStore, IOrderItemRepository orderItemRepository) : IOrderRepository
 {
     public async Task<bool> HasOpenOrderAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default)
     {
@@ -111,13 +111,23 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
             """;
 
         var row = await connection.QuerySingleOrDefaultAsync<OrderRow>(sql, new { tenantId, orderId });
-        return row?.ToDomain();
+        if (row is null)
+        {
+            return null;
+        }
+
+        // The aggregate must reflect its current items to report a correct Total (BR5) - a
+        // caller that only needed the order's own fields (e.g. CreateOrder's status/table
+        // checks) still gets a fully-formed, accurate Order, not one that silently lies about
+        // Total being zero once AddItem has run.
+        var items = await orderItemRepository.GetByOrderAsync(tenantId, orderId, cancellationToken);
+        return row.ToDomain(items);
     }
 
     // Npgsql returns "timestamptz" as DateTime (UTC), not DateTimeOffset; Dapper's constructor
     // matching requires an exact type match, so the mismatch must be converted explicitly.
     private sealed record OrderRow(Guid Id, Guid Tenant_Id, Guid Table_Id, string Status, DateTime Created_At, Guid Created_By_User_Id)
     {
-        public Order ToDomain() => Order.Reconstruct(Id, Tenant_Id, Table_Id, Created_By_User_Id, new DateTimeOffset(DateTime.SpecifyKind(Created_At, DateTimeKind.Utc)));
+        public Order ToDomain(IReadOnlyList<OrderItem> items) => Order.Reconstruct(Id, Tenant_Id, Table_Id, Created_By_User_Id, new DateTimeOffset(DateTime.SpecifyKind(Created_At, DateTimeKind.Utc)), items);
     }
 }

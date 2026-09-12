@@ -15,6 +15,18 @@ public sealed class AddItemHandler(
     {
         var tenantId = currentUser.TenantId;
 
+        if (command.IdempotencyKey is { Length: > 0 } idempotencyKey)
+        {
+            // Checked before resolving the order/menu item below: a key reused against a
+            // different (possibly nonexistent) OrderId/MenuItemId must be a 409 conflict per
+            // AC9, not a 404 that leaks past the identity check first.
+            var existingClaim = await orderItemRepository.FindIdempotencyClaimAsync(tenantId, idempotencyKey, cancellationToken);
+            if (existingClaim is not null)
+            {
+                return await ReplayOrConflictAsync(tenantId, idempotencyKey, existingClaim, command, cancellationToken);
+            }
+        }
+
         var order = await orderRepository.GetAsync(tenantId, command.OrderId, cancellationToken)
             ?? throw new OrderNotFoundException(command.OrderId);
 
@@ -40,11 +52,35 @@ public sealed class AddItemHandler(
             maxAlcoholicQuantity,
             command.IdempotencyKey);
 
-        // BR6: whether this call applies the mutation or replays a prior one, the response
-        // below always re-reads the order's current state — never a frozen snapshot.
+        // Covers the race between the upfront check above and now: if a concurrent request
+        // claims the same key in between, AddOrMergeAsync itself re-checks atomically and
+        // throws IdempotencyKeyRaceLostException rather than double-applying.
         await orderItemRepository.AddOrMergeAsync(mergeRequest, cancellationToken);
 
-        var items = await orderItemRepository.GetByOrderAsync(tenantId, command.OrderId, cancellationToken);
-        return AddItemResult.From(command.OrderId, items);
+        return await CurrentStateAsync(tenantId, command.OrderId, cancellationToken);
+    }
+
+    private async Task<AddItemResult> ReplayOrConflictAsync(Guid tenantId, string idempotencyKey, AddItemIdempotencyClaim existingClaim, AddItemCommand command, CancellationToken cancellationToken)
+    {
+        var matches = existingClaim.OrderId == command.OrderId
+            && existingClaim.MenuItemId == command.MenuItemId
+            && existingClaim.Quantity == command.Quantity;
+
+        if (!matches)
+        {
+            throw new AddItemIdempotencyKeyConflictException(idempotencyKey);
+        }
+
+        // A matched replay never re-applies the mutation (BR6) - and, since the original call
+        // already proved the order/menu item existed, there is no need to re-validate them here.
+        return await CurrentStateAsync(tenantId, existingClaim.OrderId, cancellationToken);
+    }
+
+    private async Task<AddItemResult> CurrentStateAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken)
+    {
+        var order = await orderRepository.GetAsync(tenantId, orderId, cancellationToken)
+            ?? throw new InvalidOperationException($"Order '{orderId}' was expected to still exist but was not found.");
+
+        return AddItemResult.From(order);
     }
 }

@@ -48,6 +48,21 @@ public class AddItemEndpointTests(ApiFixture fixture)
     }
 
     [Fact]
+    public async Task AC2_OrderBelongingToAnotherTenant_ReturnsNotFound()
+    {
+        var ownerTenantId = Guid.NewGuid();
+        using var ownerClient = AuthenticatedClient(ownerTenantId, CreateOrderPermission);
+        var orderId = await CreateOpenOrderAsync(ownerClient, ownerTenantId);
+        var callerTenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(callerTenantId, AddItemPermission);
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, callerTenantId);
+
+        var response = await client.PostAsJsonAsync(ItemsEndpoint(orderId), new { menuItemId, quantity = 1 });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task AC4_MenuItemNotFound_ReturnsNotFound()
     {
         var tenantId = Guid.NewGuid();
@@ -55,6 +70,20 @@ public class AddItemEndpointTests(ApiFixture fixture)
         var orderId = await CreateOpenOrderAsync(client, tenantId);
 
         var response = await client.PostAsJsonAsync(ItemsEndpoint(orderId), new { menuItemId = Guid.NewGuid(), quantity = 1 });
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AC4_MenuItemBelongingToAnotherTenant_ReturnsNotFound()
+    {
+        var ownerTenantId = Guid.NewGuid();
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, ownerTenantId);
+        var callerTenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(callerTenantId, CreateOrderPermission, AddItemPermission);
+        var orderId = await CreateOpenOrderAsync(client, callerTenantId);
+
+        var response = await client.PostAsJsonAsync(ItemsEndpoint(orderId), new { menuItemId, quantity = 1 });
 
         Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
     }
@@ -264,6 +293,9 @@ public class AddItemEndpointTests(ApiFixture fixture)
         var finalItems = await GetOrderItemsDirectlyAsync(tenantId, orderId);
         var line = Assert.Single(finalItems);
         Assert.Equal(2, line.Quantity);
+        // add-item.md's concurrent-merge requirement also covers the order's Total, not just
+        // the line's quantity - both must reflect both requests.
+        Assert.Equal(4m, finalItems.Sum(i => i.Quantity * i.UnitPriceSnapshot));
     }
 
     [Fact]
@@ -317,14 +349,14 @@ public class AddItemEndpointTests(ApiFixture fixture)
         return body.GetProperty("orderId").GetGuid();
     }
 
-    private async Task<IReadOnlyList<(Guid MenuItemId, int Quantity)>> GetOrderItemsDirectlyAsync(Guid tenantId, Guid orderId)
+    private async Task<IReadOnlyList<(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot)>> GetOrderItemsDirectlyAsync(Guid tenantId, Guid orderId)
     {
         await using var connection = new NpgsqlConnection(fixture.ConnectionString);
         await connection.OpenAsync();
         await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = tenantId.ToString() });
 
-        var rows = await connection.QueryAsync<(Guid MenuItemId, int Quantity)>(
-            "SELECT menu_item_id AS MenuItemId, quantity AS Quantity FROM restaurant.order_items WHERE tenant_id = @tenantId AND order_id = @orderId;",
+        var rows = await connection.QueryAsync<(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot)>(
+            "SELECT menu_item_id AS MenuItemId, quantity AS Quantity, unit_price_snapshot AS UnitPriceSnapshot FROM restaurant.order_items WHERE tenant_id = @tenantId AND order_id = @orderId;",
             new { tenantId, orderId });
 
         return rows.ToList();

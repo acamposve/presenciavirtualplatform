@@ -66,8 +66,7 @@ public class AddItemHandlerTests
     {
         var order = Order.Open(TenantId, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
         var menuItem = new MenuItem(Guid.NewGuid(), TenantId, "Coke", 3m, IsAlcoholic: false);
-        var orderItemRepository = new FakeOrderItemRepository();
-        var handler = CreateHandler(orders: [order], menuItems: [menuItem], orderItemRepository: orderItemRepository);
+        var handler = CreateHandler(orders: [order], menuItems: [menuItem]);
 
         var result = await handler.HandleAsync(new AddItemCommand(order.Id, menuItem.Id, 2, null));
 
@@ -79,19 +78,36 @@ public class AddItemHandlerTests
         Assert.Equal(6m, result.Total);
     }
 
+    [Fact]
+    public async Task HandleAsync_ThrowsIdempotencyKeyConflict_ForAKeyReusedAgainstANonexistentOrder_WithoutThrowingOrderNotFound()
+    {
+        // Regression test: the idempotency claim must be checked before resolving OrderId/
+        // MenuItemId, so a mismatched reuse against an order that doesn't even exist is a 409,
+        // not a 404 (AC9).
+        var order = Order.Open(TenantId, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
+        var menuItem = new MenuItem(Guid.NewGuid(), TenantId, "Coke", 3m, IsAlcoholic: false);
+        var handler = CreateHandler(orders: [order], menuItems: [menuItem]);
+        await handler.HandleAsync(new AddItemCommand(order.Id, menuItem.Id, 1, "shared-key"));
+
+        await Assert.ThrowsAsync<AddItemIdempotencyKeyConflictException>(
+            () => handler.HandleAsync(new AddItemCommand(Guid.NewGuid(), menuItem.Id, 1, "shared-key")));
+    }
+
     private static AddItemHandler CreateHandler(
         IEnumerable<Order> orders,
         IEnumerable<MenuItem> menuItems,
-        FakeOrderItemRepository? orderItemRepository = null,
         FakeRestaurantSettingsRepository? settings = null)
-        => new(
-            new FakeOrderRepository(orders),
+    {
+        var orderItemRepository = new FakeOrderItemRepository();
+        return new(
+            new FakeOrderRepository(orders, orderItemRepository),
             new FakeMenuItemRepository(menuItems),
-            orderItemRepository ?? new FakeOrderItemRepository(),
+            orderItemRepository,
             settings ?? new FakeRestaurantSettingsRepository(null),
             new FakeCurrentUserContext(TenantId));
+    }
 
-    private sealed class FakeOrderRepository(IEnumerable<Order> orders) : IOrderRepository
+    private sealed class FakeOrderRepository(IEnumerable<Order> orders, FakeOrderItemRepository orderItemRepository) : IOrderRepository
     {
         private readonly List<Order> _orders = [.. orders];
 
@@ -101,8 +117,19 @@ public class AddItemHandlerTests
         public Task AddAsync(Order order, string? idempotencyKey, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("Not used by AddItemHandler.");
 
-        public Task<Order?> GetAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken = default)
-            => Task.FromResult(_orders.SingleOrDefault(o => o.TenantId == tenantId && o.Id == orderId));
+        public async Task<Order?> GetAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken = default)
+        {
+            var order = _orders.SingleOrDefault(o => o.TenantId == tenantId && o.Id == orderId);
+            if (order is null)
+            {
+                return null;
+            }
+
+            // Mirrors the real OrderRepository: the aggregate must reflect its current items
+            // (from the same store AddOrMergeAsync writes to) to report a correct Total (BR5).
+            var items = await orderItemRepository.GetByOrderAsync(tenantId, orderId, cancellationToken);
+            return Order.Reconstruct(order.Id, order.TenantId, order.TableId, order.CreatedByUserId, order.CreatedAt, items);
+        }
     }
 
     private sealed class FakeMenuItemRepository(IEnumerable<MenuItem> menuItems) : IMenuItemRepository
@@ -116,9 +143,13 @@ public class AddItemHandlerTests
     private sealed class FakeOrderItemRepository : IOrderItemRepository
     {
         private readonly List<OrderItem> _items = [];
+        private readonly Dictionary<string, AddItemIdempotencyClaim> _claims = [];
 
         public Task<IReadOnlyList<OrderItem>> GetByOrderAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken = default)
             => Task.FromResult<IReadOnlyList<OrderItem>>(_items.Where(i => i.OrderId == orderId).ToList());
+
+        public Task<AddItemIdempotencyClaim?> FindIdempotencyClaimAsync(Guid tenantId, string idempotencyKey, CancellationToken cancellationToken = default)
+            => Task.FromResult(_claims.GetValueOrDefault(idempotencyKey));
 
         public Task<AddItemOutcome> AddOrMergeAsync(AddItemMergeRequest request, CancellationToken cancellationToken = default)
         {
@@ -131,6 +162,11 @@ public class AddItemHandlerTests
             else
             {
                 _items.Add(new OrderItem(Guid.NewGuid(), request.OrderId, request.MenuItemId, request.Quantity, request.UnitPriceSnapshot));
+            }
+
+            if (request.IdempotencyKey is { Length: > 0 } key)
+            {
+                _claims[key] = new AddItemIdempotencyClaim(request.OrderId, request.MenuItemId, request.Quantity);
             }
 
             return Task.FromResult(AddItemOutcome.Applied);

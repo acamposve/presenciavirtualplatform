@@ -1,13 +1,13 @@
 namespace PresenciaVirtual.Modules.Restaurant.Ordering;
 
 /// <summary>
-/// Aggregate root of the Ordering capability. Only the fields and invariants required by the
-/// CreateOrder specification (BR1, BR4, BR5) are modeled here; Items and the ability to change
-/// status are introduced by future specifications (AddItem, CloseOrder, CancelOrder).
+/// Aggregate root of the Ordering capability. Owns its line items (specs/restaurant/ordering/add-item.md)
+/// and derives its Total from them (BR5); the ability to change status is introduced by future
+/// specifications (CloseOrder, CancelOrder).
 /// </summary>
 public sealed class Order
 {
-    private Order(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt)
+    private Order(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt, IReadOnlyList<OrderItem> items)
     {
         Id = id;
         TenantId = tenantId;
@@ -15,6 +15,7 @@ public sealed class Order
         CreatedByUserId = createdByUserId;
         CreatedAt = createdAt;
         Status = OrderStatus.Open;
+        Items = items;
     }
 
     public Guid Id { get; }
@@ -29,10 +30,12 @@ public sealed class Order
 
     public OrderStatus Status { get; }
 
-    /// <summary>Always zero: items do not exist until the AddItem specification is implemented (BR5).</summary>
-    public decimal Total => 0m;
+    public IReadOnlyList<OrderItem> Items { get; }
 
-    /// <summary>Opens a new order for a table (BR4: an order always starts in the Open status).</summary>
+    /// <summary>BR5: always the sum of the current items' line totals — never independently stored.</summary>
+    public decimal Total => Items.Sum(i => i.LineTotal);
+
+    /// <summary>Opens a new order for a table (BR4: an order always starts in the Open status, with no items).</summary>
     public static Order Open(Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt)
     {
         if (tenantId == Guid.Empty)
@@ -45,10 +48,10 @@ public sealed class Order
             throw new ArgumentException("Table id is required.", nameof(tableId));
         }
 
-        return new Order(Guid.NewGuid(), tenantId, tableId, createdByUserId, createdAt);
+        return new Order(Guid.NewGuid(), tenantId, tableId, createdByUserId, createdAt, items: []);
     }
 
-    /// <summary>Rehydrates an existing order from persistence. Not for creating new orders — use <see cref="Open"/>.</summary>
-    public static Order Reconstruct(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt)
-        => new(id, tenantId, tableId, createdByUserId, createdAt);
+    /// <summary>Rehydrates an existing order, including its current items, from persistence. Not for creating new orders — use <see cref="Open"/>.</summary>
+    public static Order Reconstruct(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt, IReadOnlyList<OrderItem> items)
+        => new(id, tenantId, tableId, createdByUserId, createdAt, items);
 }

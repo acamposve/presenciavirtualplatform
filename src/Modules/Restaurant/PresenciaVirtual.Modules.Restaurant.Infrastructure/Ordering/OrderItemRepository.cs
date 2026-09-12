@@ -33,6 +33,12 @@ public sealed class OrderItemRepository(ITenantDbConnectionFactory connectionFac
         return rows.ToList();
     }
 
+    public async Task<AddItemIdempotencyClaim?> FindIdempotencyClaimAsync(Guid tenantId, string idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        return await connection.QuerySingleOrDefaultAsync<AddItemIdempotencyClaim>(IdempotencyClaimSql, new { tenantId, idempotencyKey });
+    }
+
     public async Task<AddItemOutcome> AddOrMergeAsync(AddItemMergeRequest request, CancellationToken cancellationToken = default)
     {
         using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
@@ -47,13 +53,11 @@ public sealed class OrderItemRepository(ITenantDbConnectionFactory connectionFac
 
         if (request.IdempotencyKey is { Length: > 0 } idempotencyKey)
         {
-            var existing = await connection.QuerySingleOrDefaultAsync<IdempotencyClaimRow>(
-                """
-                SELECT order_id AS OrderId, menu_item_id AS MenuItemId, quantity AS Quantity
-                FROM restaurant.add_item_idempotency_keys
-                WHERE tenant_id = @TenantId AND idempotency_key = @idempotencyKey;
-                """,
-                new { request.TenantId, idempotencyKey }, transaction);
+            // Re-checked here (under the lock above) as the race-safety net for the Handler's
+            // own upfront FindIdempotencyClaimAsync call: a concurrent request may have claimed
+            // this key in between.
+            var existing = await connection.QuerySingleOrDefaultAsync<AddItemIdempotencyClaim>(
+                IdempotencyClaimSql, new { request.TenantId, idempotencyKey }, transaction);
 
             if (existing is not null)
             {
@@ -114,5 +118,9 @@ public sealed class OrderItemRepository(ITenantDbConnectionFactory connectionFac
     private static Task LockAsync(System.Data.IDbConnection connection, System.Data.IDbTransaction transaction, string lockKey)
         => connection.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, 0));", new { lockKey }, transaction);
 
-    private sealed record IdempotencyClaimRow(Guid OrderId, Guid MenuItemId, int Quantity);
+    private const string IdempotencyClaimSql = """
+        SELECT order_id AS OrderId, menu_item_id AS MenuItemId, quantity AS Quantity
+        FROM restaurant.add_item_idempotency_keys
+        WHERE tenant_id = @tenantId AND idempotency_key = @idempotencyKey;
+        """;
 }
