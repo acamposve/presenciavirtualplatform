@@ -94,7 +94,9 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 
 - **Unit tests:** Table aggregate creation invariants (BR2 — label required, length bound).
 - **Integration tests:** AC1–AC5 above, executed against the real API and database.
-- **Tenant isolation (ADR 0002 rule 8):** `CreateTable` takes no table or tenant identifier as input and `GetTable`/`ListTables` are out of scope, so isolation cannot be exercised through the public API alone. Following the same pattern used for `CreateOrder` (`RowLevelSecurityTests`), verify directly through the application's least-privileged database role: a table created under Tenant A (via `CreateTable`) is not returned by a query scoped to Tenant B's tenant context, confirming Row-Level Security — not just application-level filtering — enforces the boundary.
+- **Tenant isolation (ADR 0002 rule 8 — both read and write):** `CreateTable` takes no table or tenant identifier as input and `GetTable`/`ListTables` are out of scope, so isolation cannot be exercised through the public API alone. Following the same pattern used for `CreateOrder` (`RowLevelSecurityTests`), verify directly through the application's least-privileged database role:
+  - **Read:** a table created under Tenant A is not returned by a query scoped to Tenant B's tenant context.
+  - **Write:** with the database tenant context set to Tenant B, an attempt to insert a table row carrying Tenant A's `tenant_id` is rejected by Row-Level Security (the `WITH CHECK` side of the policy, not just the `USING`/read side) — this is the one CreateTable-specific case worth its own test, since CreateTable is the platform's first *write* capability exercised against this policy; `CreateOrder`'s own RLS tests did not cover this side and should eventually gain an equivalent case too.
 
 ## Out of Scope
 
