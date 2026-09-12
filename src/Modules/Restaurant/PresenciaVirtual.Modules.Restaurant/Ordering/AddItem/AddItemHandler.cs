@@ -53,8 +53,10 @@ public sealed class AddItemHandler(
             command.IdempotencyKey);
 
         // Covers the race between the upfront check above and now: if a concurrent request
-        // claims the same key in between, AddOrMergeAsync itself re-checks atomically and
-        // throws IdempotencyKeyRaceLostException rather than double-applying.
+        // claims the same key in between, AddOrMergeAsync itself re-checks atomically (under
+        // the same advisory lock as the merge) and either returns AddItemOutcome.Replayed
+        // without mutating anything (the concurrent request's key+request matched), or throws
+        // AddItemIdempotencyKeyConflictException (it didn't) - never double-applying.
         await orderItemRepository.AddOrMergeAsync(mergeRequest, cancellationToken);
 
         return await CurrentStateAsync(tenantId, command.OrderId, cancellationToken);

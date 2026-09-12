@@ -270,6 +270,24 @@ public class AddItemEndpointTests(ApiFixture fixture)
     }
 
     [Fact]
+    public async Task LineQuantityOverflow_ReturnsConflictInsteadOfServerError()
+    {
+        // Regression test: a line already near int.MaxValue must be rejected with a proper
+        // client error, not left to overflow the "integer" column and surface as a 500 - and
+        // this must hold even with no alcoholic-item limit configured, since the guard is
+        // independent of BR7.
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, CreateOrderPermission, AddItemPermission);
+        var orderId = await CreateOpenOrderAsync(client, tenantId);
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, tenantId);
+        await SeedOrderItemQuantityDirectlyAsync(tenantId, orderId, menuItemId, quantity: int.MaxValue - 1);
+
+        var response = await client.PostAsJsonAsync(ItemsEndpoint(orderId), new { menuItemId, quantity = 2 });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
     public async Task Concurrency_SameMenuItemAddedTwiceAtTheSameTime_BothAreReflectedInTheFinalQuantity()
     {
         var tenantId = Guid.NewGuid();
@@ -347,6 +365,16 @@ public class AddItemEndpointTests(ApiFixture fixture)
         var response = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("orderId").GetGuid();
+    }
+
+    private async Task SeedOrderItemQuantityDirectlyAsync(Guid tenantId, Guid orderId, Guid menuItemId, int quantity)
+    {
+        await using var connection = new NpgsqlConnection(fixture.ConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = tenantId.ToString() });
+        await connection.ExecuteAsync(
+            "INSERT INTO restaurant.order_items (id, tenant_id, order_id, menu_item_id, quantity, unit_price_snapshot) VALUES (@id, @tenantId, @orderId, @menuItemId, @quantity, 1);",
+            new { id = Guid.NewGuid(), tenantId, orderId, menuItemId, quantity });
     }
 
     private async Task<IReadOnlyList<(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot)>> GetOrderItemsDirectlyAsync(Guid tenantId, Guid orderId)

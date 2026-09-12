@@ -105,6 +105,10 @@ public static class OrderEndpoints
         {
             return Results.Conflict();
         }
+        catch (LineQuantityTooLargeException)
+        {
+            return Results.Conflict();
+        }
         catch (AddItemIdempotencyKeyConflictException)
         {
             return Results.Conflict();

@@ -14,3 +14,10 @@ public sealed class AlcoholicItemLimitExceededException(Guid menuItemId, int lim
 
 /// <summary>AC9/BR6: the idempotency key was already used for a different request.</summary>
 public sealed class AddItemIdempotencyKeyConflictException(string idempotencyKey) : Exception($"Idempotency key '{idempotencyKey}' was already used for a different request.");
+
+/// <summary>
+/// The resulting line quantity would exceed what the database column can represent. Rejected
+/// explicitly — independent of BR7's alcoholic-item limit, which does not apply to every menu
+/// item — rather than allowed to reach the database and fail with an unhandled overflow error.
+/// </summary>
+public sealed class LineQuantityTooLargeException(Guid menuItemId) : Exception($"Adding this quantity to menu item '{menuItemId}' would exceed the maximum representable line quantity.");

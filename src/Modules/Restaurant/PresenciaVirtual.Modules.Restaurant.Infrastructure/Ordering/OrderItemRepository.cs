@@ -84,6 +84,17 @@ public sealed class OrderItemRepository(ITenantDbConnectionFactory connectionFac
             """,
             request, transaction) ?? 0;
 
+        // Checked before the alcohol-limit policy, and independent of it: this applies to every
+        // menu item, not only ones with a configured limit. The column itself is a PostgreSQL
+        // "integer" - without this guard, a line already near int.MaxValue would overflow at
+        // the INSERT below (SQLSTATE 22003), escaping every catch clause the endpoint has as an
+        // unhandled 500 instead of a proper client error.
+        if (LineQuantityPolicy.WouldOverflow(existingQuantity, request.Quantity))
+        {
+            transaction.Rollback();
+            throw new LineQuantityTooLargeException(request.MenuItemId);
+        }
+
         if (AlcoholicItemLimitPolicy.Exceeds(existingQuantity, request.Quantity, request.MaxAlcoholicItemQuantityPerLine))
         {
             transaction.Rollback();
