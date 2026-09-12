@@ -33,7 +33,11 @@ _No terms defined yet. Add terms as Core specifications are approved._
 
 ## Restaurant
 
-_No terms defined yet. Add terms as Restaurant specifications are approved._
+| Term | Definition |
+|---|---|
+| Order | Aggregate root of the Ordering capability. Represents a table's tab, from opening (`CreateOrder`) through future item additions and closing. |
+| OrderStatus | The lifecycle state of an Order. Only `Open` exists so far (`specs/restaurant/ordering/create-order.md`); further values are introduced by future specifications (AddItem, CloseOrder, CancelOrder). |
+| Table | A physical table in a Restaurant, referenced by `CreateOrder` but owned by a separate, not-yet-written Table Management specification. |
 
 ## Retail
 

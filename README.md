@@ -73,12 +73,27 @@ Requirements: [.NET 10 SDK](https://dotnet.microsoft.com/download) (pinned in `g
 # 1. Start PostgreSQL
 docker compose up -d
 
-# 2. Build and run the API
+# 2. Create your local, gitignored configuration (connection string, JWT signing key, app
+#    role password) from the committed example
+cp src/Api/PresenciaVirtual.Api/appsettings.Development.json.example \
+   src/Api/PresenciaVirtual.Api/appsettings.Development.json
+
+# 3. Build and run the API
 dotnet build src/PresenciaVirtual.slnx
 dotnet run --project src/Api/PresenciaVirtual.Api
 ```
 
-The API exposes health checks at `/health`, `/health/live`, and `/health/ready`. Local connection strings live in the gitignored `appsettings.Development.json` (see `.env.example` for the matching Docker Compose credentials).
+The API exposes health checks at `/health`, `/health/live`, and `/health/ready`. Local secrets live in the gitignored `appsettings.Development.json` — see `.env.example` for the matching Docker Compose credentials, and `appsettings.Development.json.example` for every setting the API needs to start (all placeholder values, safe to commit).
+
+On startup, the API applies its own database migrations — including creating the least-privilege `presenciavirtual_app` role that Row-Level Security is enforced against (see [ADR 0002](docs/adr/0002-tenant-isolation-strategy.md)) — against whatever `ConnectionStrings:Postgres` points to, in every environment.
+
+### Running Tests
+
+```bash
+dotnet test src/PresenciaVirtual.slnx
+```
+
+Integration tests spin up their own ephemeral PostgreSQL container via [Testcontainers](https://testcontainers.com/) — Docker must be running, but `docker compose up` is not required for tests.
 
 ## Contributing
 

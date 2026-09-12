@@ -1,0 +1,16 @@
+{
+  "ConnectionStrings": {
+    "Postgres": "Host=localhost;Port=5432;Database=presenciavirtual;Username=presenciavirtual;Password=presenciavirtual"
+  },
+  "Authentication": {
+    "Jwt": {
+      "Issuer": "presenciavirtual-platform-dev",
+      "SigningKey": "replace-with-any-local-only-secret-at-least-32-characters-long"
+    }
+  },
+  "Database": {
+    "AppRole": {
+      "Password": "replace-with-any-local-only-password"
+    }
+  }
+}
