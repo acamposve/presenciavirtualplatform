@@ -35,9 +35,12 @@ _No terms defined yet. Add terms as Core specifications are approved._
 
 | Term | Definition |
 |---|---|
-| Order | Aggregate root of the Ordering capability. Represents a table's tab, from opening (`CreateOrder`) through future item additions and closing. |
-| OrderStatus | The lifecycle state of an Order. Only `Open` exists so far (`specs/restaurant/ordering/create-order.md`); further values are introduced by future specifications (AddItem, CloseOrder, CancelOrder). |
-| Table | A physical table in a Restaurant, referenced by `CreateOrder` and owned by the Tables capability (`specs/restaurant/tables/create-table.md`, Draft). |
+| Order | Aggregate root of the Ordering capability. Represents a table's tab, from opening (`CreateOrder`) through adding items (`AddItem`) to future closing. Owns a collection of `OrderItem`s; its `Total` is always derived from them. |
+| OrderStatus | The lifecycle state of an Order. Only `Open` exists so far (`specs/restaurant/ordering/create-order.md`); further values are introduced by future specifications (CloseOrder, CancelOrder). |
+| OrderItem | A line on an Order (`specs/restaurant/ordering/add-item.md`): a `MenuItemId`, a `Quantity`, and a `UnitPriceSnapshot` fixed when the line is first created. At most one line per menu item per order — adding the same item again increases its quantity instead of creating a second line. |
+| MenuItem | A minimal reference concept (not a full Menu Management aggregate) representing an item a restaurant sells, with a name, a price, and whether it is alcoholic. Referenced by `AddItem`; no capability to create or edit one exists yet. |
+| RestaurantSettings | A minimal per-tenant reference concept for restaurant-specific configuration, starting with `MaxAlcoholicItemQuantityPerLine` (`specs/restaurant/ordering/add-item.md`, BR7). No capability to configure it exists yet — a tenant without a value has no limit. |
+| Table | A physical table in a Restaurant, referenced by `CreateOrder` and owned by the Tables capability (`specs/restaurant/tables/create-table.md`). |
 
 ## Retail
 

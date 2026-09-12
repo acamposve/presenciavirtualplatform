@@ -1,4 +1,5 @@
 using Microsoft.AspNetCore.Mvc;
+using PresenciaVirtual.Modules.Restaurant.Ordering.AddItem;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 
 namespace PresenciaVirtual.Api.Endpoints.Restaurant;
@@ -11,6 +12,9 @@ public static class OrderEndpoints
 
         group.MapPost("/", CreateOrderAsync)
             .RequireAuthorization("restaurant.orders.create");
+
+        group.MapPost("/{orderId:guid}/items", AddItemAsync)
+            .RequireAuthorization("restaurant.orders.additem");
 
         return app;
     }
@@ -58,4 +62,58 @@ public static class OrderEndpoints
     private sealed record CreateOrderRequest(Guid TableId);
 
     private sealed record CreateOrderResponse(Guid OrderId, Guid TableId, string Status, DateTimeOffset CreatedAt);
+
+    private static async Task<IResult> AddItemAsync(
+        Guid orderId,
+        AddItemRequest request,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        AddItemHandler handler,
+        CancellationToken cancellationToken)
+    {
+        var command = new AddItemCommand(orderId, request.MenuItemId, request.Quantity, idempotencyKey);
+
+        var errors = AddItemValidator.Validate(command);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [.. errors] });
+        }
+
+        try
+        {
+            var result = await handler.HandleAsync(command, cancellationToken);
+
+            var response = new AddItemResponse(
+                result.OrderId,
+                [.. result.Items.Select(i => new AddItemResponseLine(i.MenuItemId, i.Quantity, i.UnitPriceSnapshot, i.LineTotal))],
+                result.Total);
+
+            return Results.Ok(response);
+        }
+        catch (OrderNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (MenuItemNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (OrderNotOpenException)
+        {
+            return Results.Conflict();
+        }
+        catch (AlcoholicItemLimitExceededException)
+        {
+            return Results.Conflict();
+        }
+        catch (AddItemIdempotencyKeyConflictException)
+        {
+            return Results.Conflict();
+        }
+    }
+
+    private sealed record AddItemRequest(Guid MenuItemId, int Quantity);
+
+    private sealed record AddItemResponseLine(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot, decimal LineTotal);
+
+    private sealed record AddItemResponse(Guid OrderId, IReadOnlyList<AddItemResponseLine> Items, decimal Total);
 }

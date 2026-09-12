@@ -4,10 +4,15 @@ using PresenciaVirtual.Modules.Core.Infrastructure.Persistence;
 using PresenciaVirtual.Modules.Core.Infrastructure.Security;
 using PresenciaVirtual.Modules.Core.Persistence;
 using PresenciaVirtual.Modules.Core.Security;
+using PresenciaVirtual.Modules.Restaurant.Infrastructure.Menu;
 using PresenciaVirtual.Modules.Restaurant.Infrastructure.Ordering;
+using PresenciaVirtual.Modules.Restaurant.Infrastructure.Settings;
 using PresenciaVirtual.Modules.Restaurant.Infrastructure.Tables;
+using PresenciaVirtual.Modules.Restaurant.Menu;
 using PresenciaVirtual.Modules.Restaurant.Ordering;
+using PresenciaVirtual.Modules.Restaurant.Ordering.AddItem;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
+using PresenciaVirtual.Modules.Restaurant.Settings;
 using PresenciaVirtual.Modules.Restaurant.Tables;
 using PresenciaVirtual.Modules.Restaurant.Tables.CreateTable;
 
@@ -18,7 +23,7 @@ builder.Services.AddHealthChecks();
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddPresenciaVirtualAuthentication(builder.Configuration);
-builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.orders.create", "restaurant.tables.create"]));
+builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.orders.create", "restaurant.tables.create", "restaurant.orders.additem"]));
 
 builder.Services.AddScoped<ICurrentUserContext, HttpContextCurrentUserContext>();
 builder.Services.AddScoped<ITenantDbConnectionFactory, NpgsqlTenantDbConnectionFactory>();
@@ -27,8 +32,12 @@ builder.Services.AddSingleton(TimeProvider.System);
 builder.Services.AddScoped<ITableRepository, TableRepository>();
 builder.Services.AddScoped<IOrderRepository, OrderRepository>();
 builder.Services.AddScoped<IIdempotencyStore, IdempotencyStore>();
+builder.Services.AddScoped<IMenuItemRepository, MenuItemRepository>();
+builder.Services.AddScoped<IOrderItemRepository, OrderItemRepository>();
+builder.Services.AddScoped<IRestaurantSettingsRepository, RestaurantSettingsRepository>();
 builder.Services.AddScoped<CreateOrderHandler>();
 builder.Services.AddScoped<CreateTableHandler>();
+builder.Services.AddScoped<AddItemHandler>();
 
 var app = builder.Build();
 

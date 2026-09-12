@@ -1,3 +1,6 @@
+using System.Net.Http.Headers;
+using System.Net.Http.Json;
+using System.Text.Json;
 using Dapper;
 using Npgsql;
 using Xunit;
@@ -85,6 +88,39 @@ public class RowLevelSecurityTests(ApiFixture fixture)
         var exception = await Assert.ThrowsAsync<PostgresException>(() => connection.ExecuteAsync(
             "INSERT INTO restaurant.tables (id, tenant_id, label) VALUES (@id, @tenantId, 'Should be rejected');",
             new { id = Guid.NewGuid(), tenantId = ownerTenantId }));
+
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
+
+    [Fact]
+    public async Task AppRole_CannotInsertAnOrderItemForAnotherTenant()
+    {
+        // specs/restaurant/ordering/add-item.md's write-isolation requirement, for the second
+        // write capability (after CreateTable) exercised against these policies. The row's own
+        // tenant_id matches its order/menu-item foreign key targets (tenantA) so this fails on
+        // RLS specifically, not a foreign-key violation.
+        var tenantA = Guid.NewGuid();
+        var tenantB = Guid.NewGuid();
+
+        var client = fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", TestJwtTokenFactory.CreateToken(tenantA, Guid.NewGuid(), "restaurant.orders.create"));
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantA);
+        var orderResponse = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
+        var orderBody = await orderResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var orderId = orderBody.GetProperty("orderId").GetGuid();
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, tenantA);
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = tenantB.ToString() });
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => connection.ExecuteAsync(
+            """
+            INSERT INTO restaurant.order_items (id, tenant_id, order_id, menu_item_id, quantity, unit_price_snapshot)
+            VALUES (@id, @tenantA, @orderId, @menuItemId, 1, 5);
+            """,
+            new { id = Guid.NewGuid(), tenantA, orderId, menuItemId }));
 
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
     }
