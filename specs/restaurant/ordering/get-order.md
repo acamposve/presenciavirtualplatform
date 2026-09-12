@@ -1,6 +1,6 @@
 # Specification: Ordering / GetOrder
 
-**Status:** Draft
+**Status:** Draft — Pending Review
 **Bounded Context:** Restaurant
 **Business Capability:** Ordering
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
@@ -31,7 +31,7 @@ CreateOrder → AddItem → GetOrder → (Kitchen) → CloseOrder → Payment
 1. An authorized user MUST be able to retrieve the currently `Open` order for a specific table belonging to their own tenant, given a `TableId`.
 2. The system MUST reject the request if the table does not exist within the caller's tenant.
 3. The system MUST reject the request if the table exists but has no order in `Open` status.
-4. The system MUST return the order's identifier (`OrderId`), `TableId`, `Status`, current items (with each line's `MenuItemId`, `Quantity`, `UnitPriceSnapshot`, and `LineTotal`), and `Total` — the same field set `CreateOrder`'s and `AddItem`'s responses already use, so a single client-side order representation covers all three.
+4. The system MUST return the order's identifier (`OrderId`), `TableId`, `Status`, current items (with each line's `MenuItemId`, `Quantity`, `UnitPriceSnapshot`, and `LineTotal`), and `Total`. This is intentionally a superset of `CreateOrder`'s response (which has no `Items`/`Total` yet, since an order starts empty) and of `AddItem`'s response (which has no `TableId`/`Status`, since the caller already knows the order it just mutated) — `GetOrder` is the one lookup capability that must stand on its own without prior context, so its response carries every field needed to fully represent an order. This does not require changing `CreateOrder`'s or `AddItem`'s existing response contracts.
 5. The response MUST reflect the order's current state at the time of the request (no caching or stale snapshot), assembled from a single consistent read of the order and its items — not from separate reads that could straddle a concurrent `AddItem` commit and mix an old order state with new items or vice versa.
 
 ## Non-Functional Requirements
@@ -45,7 +45,7 @@ CreateOrder → AddItem → GetOrder → (Kitchen) → CloseOrder → Payment
 - **BR1:** A lookup is always scoped to a `TableId`, not an `OrderId` — this is the capability `add-item.md` identified as missing: finding an order without already holding its identifier.
 - **BR2:** At most one `Open` order can exist per table (per `create-order.md` BR2), so a lookup by `TableId` unambiguously identifies at most one order.
 - **BR3:** This is a read-only operation. It MUST NOT create, modify, or close any order, table, or item.
-- **BR4:** The order and its items MUST be read as of a single consistent point in time (e.g. within one database transaction/snapshot). Reading the order and its items through separate, uncoordinated queries MUST NOT be considered compliant, since a concurrent `AddItem` commit between those two reads could otherwise produce a response whose `Total` does not match its own `Items` list.
+- **BR4:** The order and its items MUST be read as of a single consistent point in time. Under PostgreSQL's default `READ COMMITTED` isolation, separate statements — even within the same transaction — can each observe a different, independently-committed state, so satisfying this rule requires either a single SQL statement that reads both (e.g. a join or a single query covering both tables) or a `REPEATABLE READ`/`SERIALIZABLE` transaction, on one connection, spanning both reads. Two uncoordinated `READ COMMITTED` queries — even if issued back-to-back — MUST NOT be considered compliant, since a concurrent `AddItem` commit landing between them could otherwise produce a response whose `Total` does not match its own `Items` list.
 
 ## Acceptance Criteria
 
@@ -57,7 +57,8 @@ CreateOrder → AddItem → GetOrder → (Kitchen) → CloseOrder → Payment
 - **AC6 — Unauthenticated request:** Given no valid authentication, when get-order is called, then the request is rejected as Unauthorized.
 - **AC7 — Reflects prior AddItem calls:** Given an `Open` order that has had one or more `AddItem` calls applied to it, when the order is requested, then the response's items and total match the order's current state, not the state at the time the order was created.
 - **AC8 — Empty order:** Given an `Open` order with no items yet (no `AddItem` call made), when it is requested, then the response contains an empty item list and a total of zero.
-- **AC9 — Consistent read under a concurrent write:** Given a `GetOrder` request running concurrently with an `AddItem` request against the same order, when both complete, then the `GetOrder` response's `Total` always matches the sum of its own `Items` list (BR4) — it never reflects the `AddItem` call's new line without also reflecting its line total, or vice versa.
+- **AC9 — Consistent read under a concurrent write:** Given a `GetOrder` request running concurrently with an `AddItem` request against the same order, when both complete, then the `GetOrder` response reflects either the complete pre-`AddItem` state or the complete post-`AddItem` state of both the order and its items — never a mix (e.g. the new line's quantity without its price, or the new line without its contribution to `Total`). `Total` matching the sum of the response's own `Items` (an internal-consistency check alone) is necessary but not sufficient to demonstrate this — the test MUST control the interleaving explicitly (e.g. by holding `AddItem`'s transaction open until after `GetOrder`'s read begins) rather than relying on incidental timing, so it can assert which of the two complete states was actually returned.
+- **AC10 — Missing or malformed TableId:** Given a request with a `TableId` that is missing or not a valid identifier, when `GetOrder` is called, then the request is rejected as a validation error (400 Bad Request), consistent with the Error Scenarios table.
 
 ## Domain Concepts
 
@@ -99,10 +100,11 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 ## Testing Requirements
 
 - **Unit tests:** none beyond what `OrderTests.cs` already covers (`Order.Reconstruct` deriving `Total` from items) — this capability introduces no new domain behavior, only a new read path.
-- **Integration tests:** AC1–AC9 above, executed against the real API and database, including:
+- **Integration tests:** AC1–AC10 above, executed against the real API and database, including:
   - Cross-tenant isolation (read side, per ADR 0002 rule 8) for the table lookup **and** for the order/item reads: a request authenticated as Tenant A must never be able to retrieve Tenant B's table, order, or order items, exercised as direct least-privilege-role checks (following `RowLevelSecurityTests.cs`'s pattern), not only through application-level behavior.
   - A table with an `Open` order that has multiple items across multiple `AddItem` calls (including merged lines, per `add-item.md` BR4), confirming the response's `Items` and `Total` match the order's persisted items — with `Total` always the sum of those items' line totals, never an independently stored value.
-  - **Consistent read under concurrency (BR4, AC9):** a `GetOrder` request running concurrently with an `AddItem` request against the same order must not return a response whose `Total` disagrees with its own `Items` list.
+  - **Consistent read under a controlled interleaving (BR4, AC9):** with `AddItem`'s transaction deliberately held open (not yet committed) while a `GetOrder` request runs and completes, the response must reflect the complete pre-commit state; once `AddItem` is allowed to commit, a subsequent `GetOrder` must reflect the complete post-commit state. This proves the isolation mechanism chosen for BR4 (a single statement, or `REPEATABLE READ`/`SERIALIZABLE`), not merely that `Total` happens to match `Items` in an unconstrained race.
+  - **Validation (AC10):** a request with a missing or malformed `TableId` is rejected as 400 Bad Request, following the same pattern as `CreateOrderEndpointTests.cs`/`AddItemEndpointTests.cs`.
 
 ## Out of Scope
 
