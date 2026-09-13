@@ -191,6 +191,9 @@ public class AddItemHandlerTests
             CallCount++;
             return Task.FromResult(limit);
         }
+
+        public Task UpsertAsync(RestaurantSettings settings, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by AddItemHandler.");
     }
 
     private sealed class FakeCurrentUserContext(Guid tenantId) : ICurrentUserContext

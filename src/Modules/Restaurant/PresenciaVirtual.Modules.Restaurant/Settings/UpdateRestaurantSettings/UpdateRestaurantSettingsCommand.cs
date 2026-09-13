@@ -1,0 +1,3 @@
+namespace PresenciaVirtual.Modules.Restaurant.Settings.UpdateRestaurantSettings;
+
+public sealed record UpdateRestaurantSettingsCommand(int? MaxAlcoholicItemQuantityPerLine);
