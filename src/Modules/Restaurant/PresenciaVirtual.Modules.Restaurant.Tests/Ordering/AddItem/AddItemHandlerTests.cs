@@ -39,7 +39,7 @@ public class AddItemHandlerTests
     public async Task HandleAsync_DoesNotQuerySettings_WhenMenuItemIsNotAlcoholic()
     {
         var order = Order.Open(TenantId, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
-        var menuItem = new MenuItem(Guid.NewGuid(), TenantId, "Coke", 3m, IsAlcoholic: false);
+        var menuItem = MenuItem.Reconstruct(Guid.NewGuid(), TenantId, "Coke", 3m, isAlcoholic: false, DateTimeOffset.UtcNow);
         var settings = new FakeRestaurantSettingsRepository(5);
         var handler = CreateHandler(orders: [order], menuItems: [menuItem], settings: settings);
 
@@ -52,7 +52,7 @@ public class AddItemHandlerTests
     public async Task HandleAsync_QueriesSettings_WhenMenuItemIsAlcoholic()
     {
         var order = Order.Open(TenantId, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
-        var menuItem = new MenuItem(Guid.NewGuid(), TenantId, "Beer", 5m, IsAlcoholic: true);
+        var menuItem = MenuItem.Reconstruct(Guid.NewGuid(), TenantId, "Beer", 5m, isAlcoholic: true, DateTimeOffset.UtcNow);
         var settings = new FakeRestaurantSettingsRepository(5);
         var handler = CreateHandler(orders: [order], menuItems: [menuItem], settings: settings);
 
@@ -65,7 +65,7 @@ public class AddItemHandlerTests
     public async Task HandleAsync_ReturnsCurrentOrderStateAfterTheMerge()
     {
         var order = Order.Open(TenantId, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
-        var menuItem = new MenuItem(Guid.NewGuid(), TenantId, "Coke", 3m, IsAlcoholic: false);
+        var menuItem = MenuItem.Reconstruct(Guid.NewGuid(), TenantId, "Coke", 3m, isAlcoholic: false, DateTimeOffset.UtcNow);
         var handler = CreateHandler(orders: [order], menuItems: [menuItem]);
 
         var result = await handler.HandleAsync(new AddItemCommand(order.Id, menuItem.Id, 2, null));
@@ -85,7 +85,7 @@ public class AddItemHandlerTests
         // MenuItemId, so a mismatched reuse against an order that doesn't even exist is a 409,
         // not a 404 (AC9).
         var order = Order.Open(TenantId, Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
-        var menuItem = new MenuItem(Guid.NewGuid(), TenantId, "Coke", 3m, IsAlcoholic: false);
+        var menuItem = MenuItem.Reconstruct(Guid.NewGuid(), TenantId, "Coke", 3m, isAlcoholic: false, DateTimeOffset.UtcNow);
         var handler = CreateHandler(orders: [order], menuItems: [menuItem]);
         await handler.HandleAsync(new AddItemCommand(order.Id, menuItem.Id, 1, "shared-key"));
 
@@ -144,6 +144,9 @@ public class AddItemHandlerTests
 
         public Task<MenuItem?> GetAsync(Guid tenantId, Guid menuItemId, CancellationToken cancellationToken = default)
             => Task.FromResult(_menuItems.SingleOrDefault(m => m.TenantId == tenantId && m.Id == menuItemId));
+
+        public Task AddAsync(MenuItem menuItem, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by AddItemHandler.");
     }
 
     private sealed class FakeOrderItemRepository : IOrderItemRepository
