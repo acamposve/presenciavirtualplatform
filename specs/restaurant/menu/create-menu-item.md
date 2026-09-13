@@ -30,7 +30,7 @@ This specification covers only creating a menu item. Editing a menu item's name,
 
 1. An authorized user MUST be able to register a new menu item within their own tenant, given a name and a price.
 2. The system MUST reject the request if the name is empty or exceeds 200 characters.
-3. The system MUST reject the request if the price is not a positive value.
+3. The system MUST reject the request if the price is not a positive value, or has more than 2 digits after the decimal point.
 4. The system MUST accept an optional `IsAlcoholic` flag; when omitted, it defaults to `false`.
 5. The system MUST generate a unique identifier for the new menu item.
 6. The system MUST record the tenant that owns the menu item and when it was created.
@@ -46,7 +46,7 @@ This specification covers only creating a menu item. Editing a menu item's name,
 
 - **BR1:** A MenuItem always belongs to exactly one Tenant.
 - **BR2:** A MenuItem's name MUST NOT be empty and MUST NOT exceed 200 characters.
-- **BR3:** A MenuItem's price MUST be a positive value (greater than zero). A free or negatively-priced item is not a valid menu item in this version.
+- **BR3:** A MenuItem's price MUST be a positive value (greater than zero) with at most 2 digits after the decimal point, matching `restaurant.menu_items.price`'s `numeric(10, 2)` column. A free or negatively-priced item is not a valid menu item in this version, and a price with more precision than the column supports (e.g. `1.999`) MUST be rejected rather than silently rounded — the persisted price must always be exactly the price the caller requested.
 - **BR4:** `IsAlcoholic` is a plain boolean, defaulting to `false` when not supplied. It has no effect on its own here — it only matters once `add-item.md` BR7's configured per-tenant limit applies to a line referencing this item.
 
 Menu item names are **not** required to be unique within a tenant in this version — see Open Questions.
@@ -58,6 +58,7 @@ Menu item names are **not** required to be unique within a tenant in this versio
 - **AC3 — Empty name:** Given a request with an empty or whitespace-only name, when the user attempts to create the menu item, then the request is rejected as a validation error and no MenuItem is created.
 - **AC4 — Name too long:** Given a name longer than 200 characters, when the user attempts to create the menu item, then the request is rejected as a validation error and no MenuItem is created.
 - **AC5 — Invalid price:** Given a price of zero or negative, when the user attempts to create the menu item, then the request is rejected as a validation error and no MenuItem is created.
+- **AC5b — Price with excess precision:** Given a price with more than 2 digits after the decimal point (e.g. `1.999`), when the user attempts to create the menu item, then the request is rejected as a validation error — it MUST NOT be silently rounded and accepted.
 - **AC6 — Missing permission:** Given an authenticated user without the `restaurant.menuitems.create` permission, when they attempt to create a menu item, then the request is rejected as Forbidden and no MenuItem is created.
 - **AC7 — Unauthenticated request:** Given no valid authentication, when create-menu-item is called, then the request is rejected as Unauthorized.
 
@@ -80,15 +81,16 @@ Menu item names are **not** required to be unique within a tenant in this versio
 | No authentication | 401 Unauthorized |
 | Authenticated but missing `restaurant.menuitems.create` | 403 Forbidden |
 | Name missing, empty, or longer than 200 characters | 400 Bad Request |
-| Price missing, zero, or negative | 400 Bad Request |
+| Price missing, zero, negative, or with more than 2 decimal places | 400 Bad Request |
 
 Internal implementation details MUST NOT be exposed in any error response, per `constitution.md` Article VIII and `architecture.md` §26.
 
 ## Data Requirements
 
 - **Writes:** a new MenuItem record scoped to the caller's tenant.
-- This reuses the `restaurant.menu_items` table already created by `0005_restaurant_menu_items.sql` for `AddItem` — no new migration is expected, only a write path where today only a manual/test seed exists. That table already has the `NOT NULL` price/name columns and the `UNIQUE (tenant_id, id)` constraint `add-item.md`'s composite foreign keys depend on; this specification does not change its schema.
+- This reuses the `restaurant.menu_items` table already created by `0005_restaurant_menu_items.sql` for `AddItem` — no schema migration is expected; that table already has the `NOT NULL` price/name columns and the `UNIQUE (tenant_id, id)` constraint `add-item.md`'s composite foreign keys depend on. A **grants migration is required**, however: `0010_add_item_grants.sql` only granted the least-privilege application role (`presenciavirtual_app`) `SELECT` on `restaurant.menu_items`, since `AddItem` only ever reads it. This specification's `INSERT` MUST be granted explicitly, following the same forward-grant pattern every other write capability in this module has needed (e.g. `0004_grants.sql`, `0010_add_item_grants.sql`).
 - Tenant isolation on the write MUST follow ADR 0002 (application-level scoping plus PostgreSQL RLS), consistent with the existing table.
+- The `price` column is `numeric(10, 2)` — at most 2 digits after the decimal point. A price with more precision than that (e.g. `1.999`) MUST be rejected as a validation error (BR3), not silently rounded to fit the column; PostgreSQL rounds a `numeric` value to its declared scale on write rather than erroring, so relying on the column alone would let the persisted price silently differ from the one requested.
 
 ## Integration Requirements
 
@@ -99,8 +101,8 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 
 ## Testing Requirements
 
-- **Unit tests:** MenuItem aggregate creation invariants (BR2 — name required, length bound; BR3 — price must be positive; BR4 — `IsAlcoholic` defaults to `false`).
-- **Integration tests:** AC1–AC7 above, executed against the real API and database.
+- **Unit tests:** MenuItem aggregate creation invariants (BR2 — name required, length bound; BR3 — price must be positive and at most 2 decimal places; BR4 — `IsAlcoholic` defaults to `false`).
+- **Integration tests:** AC1–AC7 (including AC5b) above, executed against the real API and database.
 - **Tenant isolation (ADR 0002 rule 8 — both read and write):** `CreateMenuItem` takes no menu item or tenant identifier as input and listing/querying menu items is out of scope, so isolation cannot be exercised through the public API alone. Following the same pattern used for `CreateTable` (`RowLevelSecurityTests`), verify directly through the application's least-privileged database role:
   - **Read:** a menu item created under Tenant A is not returned by a query scoped to Tenant B's tenant context.
   - **Write:** with the database tenant context set to Tenant B, an attempt to insert a menu item row carrying Tenant A's `tenant_id` is rejected by Row-Level Security (the `WITH CHECK` side of the policy) — `restaurant.menu_items` has RLS enabled since `add-item.md`, but only ever been exercised as a read (by `AddItem`'s own lookup); this is its first write-isolation test.
