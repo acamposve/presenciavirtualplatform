@@ -120,6 +120,9 @@ public class AddItemHandlerTests
         public Task<Order?> GetOpenByTableAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("Not used by AddItemHandler.");
 
+        public Task<Order> CloseAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by AddItemHandler.");
+
         public async Task<Order?> GetAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken = default)
         {
             var order = _orders.SingleOrDefault(o => o.TenantId == tenantId && o.Id == orderId);
@@ -131,7 +134,7 @@ public class AddItemHandlerTests
             // Mirrors the real OrderRepository: the aggregate must reflect its current items
             // (from the same store AddOrMergeAsync writes to) to report a correct Total (BR5).
             var items = await orderItemRepository.GetByOrderAsync(tenantId, orderId, cancellationToken);
-            return Order.Reconstruct(order.Id, order.TenantId, order.TableId, order.CreatedByUserId, order.CreatedAt, items);
+            return Order.Reconstruct(order.Id, order.TenantId, order.TableId, order.CreatedByUserId, order.CreatedAt, order.Status, items);
         }
     }
 

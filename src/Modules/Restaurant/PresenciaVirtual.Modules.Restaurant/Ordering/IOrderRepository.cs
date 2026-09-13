@@ -22,4 +22,18 @@ public interface IOrderRepository
 
     /// <summary>BR2: at most one Open order can exist per table, so this unambiguously identifies at most one order (specs/restaurant/ordering/get-order.md).</summary>
     Task<Order?> GetOpenByTableAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Closes an Open order (specs/restaurant/ordering/close-order.md). Implementations MUST
+    /// check an Idempotency-Key claim (if supplied) BEFORE resolving whether OrderId exists
+    /// (BR3), throwing <see cref="CloseOrder.CloseOrderNotFoundException"/> if the order does
+    /// not exist within the tenant, <see cref="CloseOrder.OrderAlreadyClosedException"/> if it
+    /// is not Open (BR1/BR4) and no matching-key replay applies, and
+    /// <see cref="CloseOrder.CloseOrderIdempotencyKeyConflictException"/> if the key was already
+    /// used for a different order (BR3). The Open -> Closed transition MUST serialize against a
+    /// concurrent AddItem call for the same order via the shared order-scoped lock (BR7), and the
+    /// returned Order's items MUST be read within the same transaction as the transition, before
+    /// it commits.
+    /// </summary>
+    Task<Order> CloseAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default);
 }

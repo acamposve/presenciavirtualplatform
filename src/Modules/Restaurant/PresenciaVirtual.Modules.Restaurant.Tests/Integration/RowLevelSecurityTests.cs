@@ -131,6 +131,43 @@ public class RowLevelSecurityTests(ApiFixture fixture)
     }
 
     [Fact]
+    public async Task AppRole_CannotSeeOrInsertAnotherTenantsCloseOrderIdempotencyKey()
+    {
+        // specs/restaurant/ordering/close-order.md's cross-tenant isolation requirement for its
+        // own new table (close_order_idempotency_keys) - both the read and the WITH CHECK insert
+        // side, following the same pattern as the orders/order_items and tables tests above.
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        var client = fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", TestJwtTokenFactory.CreateToken(ownerTenantId, Guid.NewGuid(), "restaurant.orders.create", "restaurant.orders.close"));
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, ownerTenantId);
+        var orderResponse = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
+        var orderId = (await orderResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("orderId").GetGuid();
+        var closeResponse = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, $"/api/v1/restaurants/orders/{orderId}/close")
+        {
+            Headers = { { "Idempotency-Key", "rls-test-key" } },
+        });
+        Assert.Equal(HttpStatusCode.OK, closeResponse.StatusCode);
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+
+        // No "AND tenant_id = ..." on purpose: a result could only come back if RLS itself were
+        // filtering, not application code.
+        var visibleOrderId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+            "SELECT order_id FROM restaurant.close_order_idempotency_keys WHERE idempotency_key = 'rls-test-key';");
+        Assert.Null(visibleOrderId);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => connection.ExecuteAsync(
+            "INSERT INTO restaurant.close_order_idempotency_keys (tenant_id, idempotency_key, order_id) VALUES (@ownerTenantId, 'rls-test-key-2', @orderId);",
+            new { ownerTenantId, orderId }));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
+
+    [Fact]
     public async Task AppRole_CannotInsertAnOrderItemForAnotherTenant()
     {
         // specs/restaurant/ordering/add-item.md's write-isolation requirement, for the second

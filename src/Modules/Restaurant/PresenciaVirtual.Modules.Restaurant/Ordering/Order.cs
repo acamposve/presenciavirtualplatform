@@ -1,20 +1,19 @@
 namespace PresenciaVirtual.Modules.Restaurant.Ordering;
 
 /// <summary>
-/// Aggregate root of the Ordering capability. Owns its line items (specs/restaurant/ordering/add-item.md)
-/// and derives its Total from them (BR5); the ability to change status is introduced by future
-/// specifications (CloseOrder, CancelOrder).
+/// Aggregate root of the Ordering capability. Owns its line items (specs/restaurant/ordering/add-item.md),
+/// derives its Total from them (BR5), and can transition Open -> Closed (specs/restaurant/ordering/close-order.md).
 /// </summary>
 public sealed class Order
 {
-    private Order(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt, IReadOnlyList<OrderItem> items)
+    private Order(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt, OrderStatus status, IReadOnlyList<OrderItem> items)
     {
         Id = id;
         TenantId = tenantId;
         TableId = tableId;
         CreatedByUserId = createdByUserId;
         CreatedAt = createdAt;
-        Status = OrderStatus.Open;
+        Status = status;
         Items = items;
     }
 
@@ -48,10 +47,33 @@ public sealed class Order
             throw new ArgumentException("Table id is required.", nameof(tableId));
         }
 
-        return new Order(Guid.NewGuid(), tenantId, tableId, createdByUserId, createdAt, items: []);
+        return new Order(Guid.NewGuid(), tenantId, tableId, createdByUserId, createdAt, OrderStatus.Open, items: []);
     }
 
-    /// <summary>Rehydrates an existing order, including its current items, from persistence. Not for creating new orders — use <see cref="Open"/>.</summary>
-    public static Order Reconstruct(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt, IReadOnlyList<OrderItem> items)
-        => new(id, tenantId, tableId, createdByUserId, createdAt, items);
+    /// <summary>
+    /// Rehydrates an existing order, including its current status and items, from persistence.
+    /// Not for creating new orders — use <see cref="Open"/>. Must be given the order's actual
+    /// persisted <paramref name="status"/> (specs/restaurant/ordering/close-order.md BR6) — a
+    /// caller that always passes <see cref="OrderStatus.Open"/> regardless of what was actually
+    /// persisted would silently misreport every closed order as still open.
+    /// </summary>
+    public static Order Reconstruct(Guid id, Guid tenantId, Guid tableId, Guid createdByUserId, DateTimeOffset createdAt, OrderStatus status, IReadOnlyList<OrderItem> items)
+        => new(id, tenantId, tableId, createdByUserId, createdAt, status, items);
+
+    /// <summary>
+    /// Closes the order (specs/restaurant/ordering/close-order.md BR1): a pure status transition
+    /// that leaves Items/Total untouched (BR5). This is the domain-level invariant, enforced
+    /// independently of — and in addition to — the database-level guard (BR4) that protects the
+    /// same rule under concurrency.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The order is not currently Open.</exception>
+    public Order Close()
+    {
+        if (Status != OrderStatus.Open)
+        {
+            throw new InvalidOperationException($"Order '{Id}' cannot be closed because its status is '{Status}', not '{OrderStatus.Open}'.");
+        }
+
+        return new Order(Id, TenantId, TableId, CreatedByUserId, CreatedAt, OrderStatus.Closed, Items);
+    }
 }

@@ -69,7 +69,7 @@ public class OrderTests
     {
         var id = Guid.NewGuid();
 
-        var order = Order.Reconstruct(id, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, items: []);
+        var order = Order.Reconstruct(id, Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, OrderStatus.Open, items: []);
 
         Assert.Equal(id, order.Id);
         Assert.Equal(OrderStatus.Open, order.Status);
@@ -84,8 +84,67 @@ public class OrderTests
             new OrderItem(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 1, 4m),
         };
 
-        var order = Order.Reconstruct(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, items);
+        var order = Order.Reconstruct(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, OrderStatus.Open, items);
 
         Assert.Equal(10m, order.Total);
+    }
+
+    [Fact]
+    public void Reconstruct_PreservesTheGivenStatus()
+    {
+        // specs/restaurant/ordering/close-order.md BR6: a prior defect had Reconstruct silently
+        // ignore whatever status it was given and always report Open - this pins the fix.
+        var order = Order.Reconstruct(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, OrderStatus.Closed, items: []);
+
+        Assert.Equal(OrderStatus.Closed, order.Status);
+    }
+
+    [Fact]
+    public void Close_TransitionsAnOpenOrderToClosed()
+    {
+        var order = Order.Open(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        var closed = order.Close();
+
+        Assert.Equal(OrderStatus.Closed, closed.Status);
+    }
+
+    [Fact]
+    public void Close_RejectsAnOrderThatIsNotOpen()
+    {
+        var order = Order.Open(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow).Close();
+
+        Assert.Throws<InvalidOperationException>(() => order.Close());
+    }
+
+    [Fact]
+    public void Close_PreservesItemsAndTotal()
+    {
+        var items = new[] { new OrderItem(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 2, 3m) };
+        var order = Order.Reconstruct(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, OrderStatus.Open, items);
+
+        var closed = order.Close();
+
+        Assert.Equal(items, closed.Items);
+        Assert.Equal(6m, closed.Total);
+    }
+
+    [Fact]
+    public void Close_PreservesIdentityAndCreationFields()
+    {
+        var id = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+        var tableId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+        var order = Order.Reconstruct(id, tenantId, tableId, userId, createdAt, OrderStatus.Open, items: []);
+
+        var closed = order.Close();
+
+        Assert.Equal(id, closed.Id);
+        Assert.Equal(tenantId, closed.TenantId);
+        Assert.Equal(tableId, closed.TableId);
+        Assert.Equal(userId, closed.CreatedByUserId);
+        Assert.Equal(createdAt, closed.CreatedAt);
     }
 }
