@@ -1,12 +1,12 @@
 # Specification: Settings / UpdateRestaurantSettings
 
-**Status:** Draft
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Settings
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
 **Last Updated:** 2026-09-13
 
-This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4.
+This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4. Approved after six rounds of review (null/omission semantics, integer range, grandfathering behavior when lowering the limit, and read/write RLS test rigor), in [PR #20](https://github.com/acamposve/presenciavirtualplatform/pull/20).
 
 ---
 
