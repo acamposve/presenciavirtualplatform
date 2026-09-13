@@ -15,8 +15,9 @@ This specification follows `constitution.md` Article I. It requires human review
 Allow restaurant staff to void an order that should never be paid — opened by mistake, a duplicate of another order, or a table that left before any service was actually rendered — so it stops accepting items and its table becomes available again, without that order being confused with a normally completed (`Closed`) one. `close-order.md` already covers the "service finished normally, proceed to payment" transition; this specification covers the other terminal outcome the lifecycle diagram has always reserved a value for:
 
 ```text
-CreateOrder → AddItem → (Kitchen) → CloseOrder → Payment
-                              ↳ CancelOrder (void, no payment)
+CreateOrder ─┬─→ AddItem → (Kitchen) → CloseOrder → Payment
+             └─→ CancelOrder (void, no payment — reachable from any Open order,
+                              with or without items, per BR1/FR4/AC1)
 ```
 
 ## Actors
