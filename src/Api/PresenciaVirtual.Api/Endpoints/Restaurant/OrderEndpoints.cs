@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using PresenciaVirtual.Modules.Restaurant.Ordering.AddItem;
+using PresenciaVirtual.Modules.Restaurant.Ordering.CloseOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.GetOrder;
 
@@ -19,6 +20,9 @@ public static class OrderEndpoints
 
         group.MapPost("/{orderId:guid}/items", AddItemAsync)
             .RequireAuthorization("restaurant.orders.additem");
+
+        group.MapPost("/{orderId:guid}/close", CloseOrderAsync)
+            .RequireAuthorization("restaurant.orders.close");
 
         return app;
     }
@@ -172,4 +176,50 @@ public static class OrderEndpoints
     private sealed record GetOrderResponseLine(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot, decimal LineTotal);
 
     private sealed record GetOrderResponse(Guid OrderId, Guid TableId, string Status, DateTimeOffset CreatedAt, IReadOnlyList<GetOrderResponseLine> Items, decimal Total);
+
+    private static async Task<IResult> CloseOrderAsync(
+        Guid orderId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CloseOrderHandler handler,
+        CancellationToken cancellationToken)
+    {
+        var command = new CloseOrderCommand(orderId, idempotencyKey);
+
+        var errors = CloseOrderValidator.Validate(command);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [.. errors] });
+        }
+
+        try
+        {
+            var result = await handler.HandleAsync(command, cancellationToken);
+
+            var response = new CloseOrderResponse(
+                result.OrderId,
+                result.TableId,
+                result.Status.ToString(),
+                result.CreatedAt,
+                [.. result.Items.Select(i => new CloseOrderResponseLine(i.MenuItemId, i.Quantity, i.UnitPriceSnapshot, i.LineTotal))],
+                result.Total);
+
+            return Results.Ok(response);
+        }
+        catch (CloseOrderNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (OrderAlreadyClosedException)
+        {
+            return Results.Conflict();
+        }
+        catch (CloseOrderIdempotencyKeyConflictException)
+        {
+            return Results.Conflict();
+        }
+    }
+
+    private sealed record CloseOrderResponseLine(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot, decimal LineTotal);
+
+    private sealed record CloseOrderResponse(Guid OrderId, Guid TableId, string Status, DateTimeOffset CreatedAt, IReadOnlyList<CloseOrderResponseLine> Items, decimal Total);
 }

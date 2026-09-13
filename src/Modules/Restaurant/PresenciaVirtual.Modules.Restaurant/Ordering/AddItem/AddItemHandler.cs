@@ -30,6 +30,11 @@ public sealed class AddItemHandler(
         var order = await orderRepository.GetAsync(tenantId, command.OrderId, cancellationToken)
             ?? throw new OrderNotFoundException(command.OrderId);
 
+        // Fast path only: cheaply rejects an already-closed order before the menu item/settings
+        // lookups below, using the order's actual persisted status (specs/restaurant/ordering/
+        // close-order.md BR6). It is NOT the authoritative guard — a concurrent CloseOrder could
+        // still commit after this check runs, which is why OrderItemRepository re-checks Status
+        // again under the shared order-scoped lock (close-order.md BR7) immediately before merging.
         if (order.Status != OrderStatus.Open)
         {
             throw new OrderNotOpenException(command.OrderId);
