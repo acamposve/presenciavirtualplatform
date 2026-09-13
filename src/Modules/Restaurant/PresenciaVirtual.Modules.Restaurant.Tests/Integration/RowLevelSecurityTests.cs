@@ -74,6 +74,63 @@ public class RowLevelSecurityTests(ApiFixture fixture)
     }
 
     [Fact]
+    public async Task AppRole_ReadsOnlyItsOwnTenantsSettings()
+    {
+        // specs/restaurant/settings/update-restaurant-settings.md's read-isolation requirement:
+        // restaurant.settings has no non-tenant key, so the only genuine way to prove RLS (not
+        // application code) is filtering is a fully unfiltered query - any "WHERE tenant_id = "
+        // clause would already produce the same result on its own, proving nothing about RLS.
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = ownerTenantId.ToString() });
+        await connection.ExecuteAsync(
+            "INSERT INTO restaurant.settings (tenant_id, max_alcoholic_item_quantity_per_line) VALUES (@ownerTenantId, 5);",
+            new { ownerTenantId });
+
+        var ownCount = await connection.ExecuteScalarAsync<long>("SELECT count(*) FROM restaurant.settings;");
+        Assert.Equal(1, ownCount);
+
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+        var otherCount = await connection.ExecuteScalarAsync<long>("SELECT count(*) FROM restaurant.settings;");
+        Assert.Equal(0, otherCount);
+    }
+
+    [Fact]
+    public async Task AppRole_CannotUpsertAnotherTenantsSettings()
+    {
+        // specs/restaurant/settings/update-restaurant-settings.md's write-isolation requirement:
+        // this is restaurant.settings's first write-isolation test. A successful same-tenant
+        // upsert must succeed first - including the ON CONFLICT DO UPDATE path UpsertAsync
+        // actually uses, not just a plain INSERT - proving the new grants migration granted both
+        // INSERT and UPDATE. Otherwise this test could not tell "blocked by RLS" apart from
+        // "blocked because the grants migration was never applied" (both fail identically), and
+        // the cross-tenant assertion below would never actually exercise the UPDATE path either.
+        const string upsertSql = """
+            INSERT INTO restaurant.settings (tenant_id, max_alcoholic_item_quantity_per_line) VALUES (@ownerTenantId, @limit)
+            ON CONFLICT (tenant_id) DO UPDATE SET max_alcoholic_item_quantity_per_line = excluded.max_alcoholic_item_quantity_per_line;
+            """;
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = ownerTenantId.ToString() });
+
+        // First upsert: INSERT branch (no existing row yet).
+        await connection.ExecuteAsync(upsertSql, new { ownerTenantId, limit = 5 });
+        // Second upsert, same tenant: exercises the UPDATE branch ON CONFLICT actually takes.
+        await connection.ExecuteAsync(upsertSql, new { ownerTenantId, limit = 10 });
+
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => connection.ExecuteAsync(upsertSql, new { ownerTenantId, limit = 20 }));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
+
+    [Fact]
     public async Task AppRole_CannotInsertOrSeeAnotherTenantsMenuItem()
     {
         // specs/restaurant/menu/create-menu-item.md's write-isolation requirement:
