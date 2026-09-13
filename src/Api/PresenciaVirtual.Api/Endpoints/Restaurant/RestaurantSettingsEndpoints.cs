@@ -38,6 +38,15 @@ public static class RestaurantSettingsEndpoints
 
         using (document)
         {
+            // TryGetProperty throws InvalidOperationException if the root isn't a JSON object
+            // (e.g. the body is `null`, `[]`, or a bare number) - checking the root kind first
+            // turns that case into the same 400 as any other malformed body, instead of an
+            // unhandled 500.
+            if (document.RootElement.ValueKind != JsonValueKind.Object)
+            {
+                return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = ["Request body must be a JSON object."] });
+            }
+
             if (!document.RootElement.TryGetProperty(FieldName, out var valueElement))
             {
                 return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [$"{FieldName} is required."] });

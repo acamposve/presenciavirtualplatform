@@ -96,6 +96,21 @@ public class UpdateRestaurantSettingsEndpointTests(ApiFixture fixture)
     }
 
     [Theory]
+    [InlineData("null")]
+    [InlineData("[]")]
+    [InlineData("5")]
+    public async Task AC4c_NonObjectRequestBody_ReturnsBadRequest_NotServerError(string json)
+    {
+        // Regression test: JsonElement.TryGetProperty throws InvalidOperationException when the
+        // root isn't a JSON object, which would otherwise surface as an unhandled 500.
+        using var client = AuthenticatedClient(Guid.NewGuid(), UpdatePermission);
+
+        var response = await client.PutAsync(Endpoint, RawJson(json));
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Theory]
     [InlineData("""{"maxAlcoholicItemQuantityPerLine": 5.5}""")]
     [InlineData("""{"maxAlcoholicItemQuantityPerLine": "abc"}""")]
     [InlineData("""{"maxAlcoholicItemQuantityPerLine": true}""")]
