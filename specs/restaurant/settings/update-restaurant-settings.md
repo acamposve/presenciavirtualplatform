@@ -26,6 +26,8 @@ UpdateRestaurantSettings → (limit configured) → AddItem observes it immediat
 
 This specification covers only setting the tenant's `MaxAlcoholicItemQuantityPerLine`. It is the only configurable setting today — `restaurant.settings` has no other column. Reading the current settings back through the API (`GetRestaurantSettings`) is a separate, not-yet-written specification (see Out of Scope), mirroring the same minimal-first-increment approach `create-table.md` and `create-menu-item.md` already took for their own resources.
 
+The endpoint is `PUT /api/v1/restaurants/settings`, reflecting that this is a full replace of a singleton, per-tenant resource (BR3) rather than a creation of a new one — unlike `CreateOrder`/`CreateTable`/`CreateMenuItem`'s own `POST` endpoints. The request body is a JSON object with a single field, `maxAlcoholicItemQuantityPerLine` (a positive integer or `null` — see FR4). On success, the response is `200 OK` with a JSON object containing that same field, reflecting the value now in effect (FR6) — there is no separate "created" (`201`) case, since the endpoint's own semantics never distinguish first-time-set from update (BR3).
+
 ## Functional Requirements
 
 1. An authorized user MUST be able to set their own tenant's `MaxAlcoholicItemQuantityPerLine` to a positive integer, up to the maximum value the `restaurant.settings.max_alcoholic_item_quantity_per_line` column (PostgreSQL `integer`) can represent (`2,147,483,647`).
@@ -40,7 +42,7 @@ This specification covers only setting the tenant's `MaxAlcoholicItemQuantityPer
 ## Non-Functional Requirements
 
 - **Tenant isolation:** enforced per ADR 0002 on the write (and on the read `AddItem` already performs).
-- **Consistency:** the updated setting must be immediately visible to a subsequent `AddItem` call by the same tenant, per FR6.
+- **Consistency:** the updated setting must be immediately visible to a subsequent `AddItem` call by the same tenant, per FR7.
 - **Observability:** the request must be traceable via structured logging with a correlation ID, per `constitution.md` Article XI. As with every other capability in this module so far, no such mechanism exists yet anywhere in the codebase; this specification does not introduce one on its own.
 - **Idempotency:** this operation is a full replace of a single-valued, per-tenant setting (an upsert keyed by `TenantId` alone) — applying the same request twice always produces the same end state. Unlike `CreateOrder`/`AddItem`/`CloseOrder`, no `Idempotency-Key` mechanism is needed: there is no "apply twice" side effect to guard against when the operation is already naturally idempotent by construction.
 
@@ -48,7 +50,7 @@ This specification covers only setting the tenant's `MaxAlcoholicItemQuantityPer
 
 - **BR1:** A tenant's Ordering settings belong to exactly that tenant — `restaurant.settings` is keyed by `tenant_id` alone (at most one row per tenant).
 - **BR2:** `MaxAlcoholicItemQuantityPerLine`, when supplied as a value, MUST be a positive integer no greater than `2,147,483,647` (matching both `restaurant.settings`'s own `CHECK (max_alcoholic_item_quantity_per_line IS NULL OR max_alcoholic_item_quantity_per_line > 0)` and the PostgreSQL `integer` column's own representable range — a value outside that range MUST be rejected as a validation error before it ever reaches the database, not left to overflow into a database error). Supplying `null` explicitly clears any existing limit — a tenant with no configured limit (whether because no row exists yet, or because it was explicitly cleared) is treated identically as "no limit enforced," per `add-item.md` BR7. The request field itself MUST always be present (FR4) — omitting it is a validation error, not an implicit `null`.
-- **BR3:** The write MUST be an upsert: create the tenant's row if it does not exist, or update it if it does. The caller never needs to know which case applies — from the caller's perspective, this endpoint always just "sets the value."
+- **BR3:** The write MUST be an upsert: create the tenant's row if it does not exist, or update it if it does — including a first-time request that explicitly supplies `null`. That case still results in a row being created for the tenant, with a `NULL` `max_alcoholic_item_quantity_per_line` value, rather than leaving no row at all: BR3's own "the caller never needs to know which case applies" would not hold if a first-time `null` behaved differently (silently staying rowless) than a first-time positive value (always creating a row). `add-item.md` BR7 already treats "no row" and "a row with `NULL`" identically (no limit enforced), so this choice has no observable effect on `AddItem`'s behavior — it only matters for this specification's own upsert semantics being uniform.
 - **BR4:** This capability only ever writes `restaurant.settings`; it MUST NOT read, validate, or modify any existing `restaurant.order_items` row. `add-item.md` BR7's own limit check only ever runs as part of an `AddItem` call, evaluated against the line's quantity *at that moment* — it is not a continuously-enforced invariant over already-committed rows. Consequently, lowering the limit below a quantity an existing line already has is not retroactive: that line is left exactly as it is (effectively grandfathered) until the next `AddItem` call attempts to add to it, at which point the new, lower limit applies to the resulting quantity like any other `AddItem` call — and, since the line is already at or above the new limit, any further addition to it will be rejected per `add-item.md` BR7/AC14.
 
 ## Acceptance Criteria
@@ -59,6 +61,8 @@ This specification covers only setting the tenant's `MaxAlcoholicItemQuantityPer
 - **AC4 — Invalid value:** Given a request with `MaxAlcoholicItemQuantityPerLine` of zero or negative, when the user attempts to set it, then the request is rejected as a validation error and no change is made.
 - **AC4b — Value exceeding the maximum:** Given a request with `MaxAlcoholicItemQuantityPerLine` greater than `2,147,483,647`, when the user attempts to set it, then the request is rejected as a validation error (400), not left to fail as a database overflow (500).
 - **AC4c — Missing field:** Given a request body that omits `MaxAlcoholicItemQuantityPerLine` entirely, when the user attempts to update settings, then the request is rejected as a validation error — it MUST NOT be silently treated as `null` (clearing the limit).
+- **AC4d — Malformed (non-integer) value:** Given a request where `MaxAlcoholicItemQuantityPerLine` is present but is not an integer or `null` (e.g. a fractional number such as `5.5`, a string, or a boolean), when the user attempts to update settings, then the request is rejected as a validation error.
+- **AC4e — First-time request with an explicit null:** Given a tenant with no existing settings row, when the user sets `MaxAlcoholicItemQuantityPerLine` to `null`, then a settings row IS created for that tenant (per BR3) with a `NULL` value — the request succeeds and does not need a prior positive value to have ever existed — and the response reflects `null`.
 - **AC5 — Missing permission:** Given an authenticated user without the `restaurant.settings.update` permission, when they attempt to update settings, then the request is rejected as Forbidden and no change is made.
 - **AC6 — Unauthenticated request:** Given no valid authentication, when update-restaurant-settings is called, then the request is rejected as Unauthorized.
 - **AC7 — Immediately observed by AddItem:** Given a tenant with no configured limit, when the user sets `MaxAlcoholicItemQuantityPerLine` to `N`, then the very next `AddItem` call that would bring an alcoholic item's line to more than `N` is rejected as Conflict, per `add-item.md` AC14 — with no delay or caching between the two calls.
@@ -99,14 +103,14 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 ## Integration Requirements
 
 - **Depends on:** Core Identity & Authentication, Core Authorization/RBAC, tenant isolation infrastructure (ADR 0002) — the same minimal Core slice every other Restaurant capability depends on.
-- **Does not depend on:** Core Organization/Location, Core Platform Billing, Notifications, Restaurant Ordering itself (this specification does not call `AddItem`; FR6/AC7 describe a consequence of `AddItem`'s own existing read, not a dependency this specification introduces), Kitchen, Payments, Inventory.
+- **Does not depend on:** Core Organization/Location, Core Platform Billing, Notifications, Restaurant Ordering itself (this specification does not call `AddItem`; FR7/AC7 describe a consequence of `AddItem`'s own existing read, not a dependency this specification introduces), Kitchen, Payments, Inventory.
 - **Publishes:** no event is defined for this version — no capability yet needs to react to a settings change.
 - **Consumes:** none.
 
 ## Testing Requirements
 
 - **Unit tests:** `RestaurantSettings` aggregate invariants (BR2 — `MaxAlcoholicItemQuantityPerLine` must be a positive integer within range when supplied; `null` is valid and means no limit).
-- **Integration tests:** AC1–AC9 above, executed against the real API and database, including:
+- **Integration tests:** AC1–AC9 (including AC4b–AC4e) above, executed against the real API and database, including:
   - AC7 as a genuine cross-capability regression (a real `AddItem` call after a real settings update, not a mock).
   - AC8, asserting the update is genuinely idempotent (exactly one row per tenant after repeating the identical request) rather than merely re-checking the response value.
   - AC9, asserting that lowering the limit below an existing line's quantity does not touch that line, and only a subsequent `AddItem` attempt against it is rejected.
