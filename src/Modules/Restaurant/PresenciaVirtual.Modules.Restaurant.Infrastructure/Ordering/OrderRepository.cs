@@ -175,19 +175,18 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
                 }
 
                 // A replay MUST NOT attempt to transition the order again (BR3); nothing was
-                // mutated, so just release the locks and re-read the order's current state.
+                // mutated, so just release the locks and re-read the order's current state - on
+                // this same, still-open connection rather than a fresh one via GetAsync, so a
+                // replay does not hold two pooled connections at once (this one, uncommitted
+                // until just below, plus a second one GetAsync would open) while waiting on it.
+                var replayRow = await connection.QuerySingleAsync<OrderRow>(SelectOrderSql, new { tenantId, orderId }, transaction);
+                var replayItems = (await connection.QueryAsync<OrderItem>(ItemsSql, new { tenantId, orderId }, transaction)).ToList();
                 transaction.Commit();
-                return await GetAsync(tenantId, orderId, cancellationToken)
-                    ?? throw new InvalidOperationException($"Order '{orderId}' was expected to still exist but was not found.");
+                return replayRow.ToDomain(replayItems);
             }
         }
 
-        const string selectSql = """
-            SELECT id, tenant_id, table_id, status, created_at, created_by_user_id
-            FROM restaurant.orders
-            WHERE tenant_id = @tenantId AND id = @orderId;
-            """;
-        var row = await connection.QuerySingleOrDefaultAsync<OrderRow>(selectSql, new { tenantId, orderId }, transaction);
+        var row = await connection.QuerySingleOrDefaultAsync<OrderRow>(SelectOrderSql, new { tenantId, orderId }, transaction);
         if (row is null)
         {
             transaction.Rollback();
@@ -249,6 +248,12 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
         FROM restaurant.order_items
         WHERE tenant_id = @tenantId AND order_id = @orderId
         ORDER BY created_at;
+        """;
+
+    private const string SelectOrderSql = """
+        SELECT id, tenant_id, table_id, status, created_at, created_by_user_id
+        FROM restaurant.orders
+        WHERE tenant_id = @tenantId AND id = @orderId;
         """;
 
     // Npgsql returns "timestamptz" as DateTime (UTC), not DateTimeOffset; Dapper's constructor
