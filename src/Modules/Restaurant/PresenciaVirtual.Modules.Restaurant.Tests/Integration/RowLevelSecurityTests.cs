@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -90,6 +91,43 @@ public class RowLevelSecurityTests(ApiFixture fixture)
             new { id = Guid.NewGuid(), tenantId = ownerTenantId }));
 
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
+
+    [Fact]
+    public async Task AppRole_CannotSeeAnotherTenantsOrderOrItsItemsEvenWithoutApplicationFiltering()
+    {
+        // specs/restaurant/ordering/get-order.md's cross-tenant isolation requirement: unlike
+        // the table-read test above, this exercises restaurant.orders and restaurant.order_items
+        // directly (GetOrder's own reads), not only restaurant.tables.
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        var client = fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", TestJwtTokenFactory.CreateToken(ownerTenantId, Guid.NewGuid(), "restaurant.orders.create", "restaurant.orders.additem"));
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, ownerTenantId);
+        var orderResponse = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
+        var orderBody = await orderResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var orderId = orderBody.GetProperty("orderId").GetGuid();
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, ownerTenantId);
+        var addItemResponse = await client.PostAsJsonAsync($"/api/v1/restaurants/orders/{orderId}/items", new { menuItemId, quantity = 1 });
+        // Without this, a broken AddItem call would silently leave order_items empty and this
+        // test would still pass (0 visible rows either way) without ever exercising its isolation.
+        Assert.Equal(HttpStatusCode.OK, addItemResponse.StatusCode);
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+
+        // No "AND tenant_id = ..." on either query, on purpose: a result could only come back if
+        // RLS itself — not application code — were filtering.
+        var visibleOrderId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+            "SELECT id FROM restaurant.orders WHERE id = @orderId;", new { orderId });
+        var visibleItemCount = await connection.ExecuteScalarAsync<long>(
+            "SELECT count(*) FROM restaurant.order_items WHERE order_id = @orderId;", new { orderId });
+
+        Assert.Null(visibleOrderId);
+        Assert.Equal(0, visibleItemCount);
     }
 
     [Fact]

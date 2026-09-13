@@ -19,4 +19,7 @@ public interface IOrderRepository
     Task AddAsync(Order order, string? idempotencyKey, CancellationToken cancellationToken = default);
 
     Task<Order?> GetAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken = default);
+
+    /// <summary>BR2: at most one Open order can exist per table, so this unambiguously identifies at most one order (specs/restaurant/ordering/get-order.md).</summary>
+    Task<Order?> GetOpenByTableAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default);
 }
