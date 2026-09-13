@@ -39,7 +39,7 @@ _No terms defined yet. Add terms as Core specifications are approved._
 | OrderStatus | The lifecycle state of an Order: `Open` (`specs/restaurant/ordering/create-order.md`) or `Closed` (`specs/restaurant/ordering/close-order.md`, a terminal state reached only from `Open`). Further values are introduced by future specifications (e.g. CancelOrder). |
 | OrderItem | A line on an Order (`specs/restaurant/ordering/add-item.md`): a `MenuItemId`, a `Quantity`, and a `UnitPriceSnapshot` fixed when the line is first created. At most one line per menu item per order — adding the same item again increases its quantity instead of creating a second line. |
 | MenuItem | Aggregate root of the Menu capability, representing an item a restaurant sells, with a name, a price, and whether it is alcoholic. Referenced by `AddItem`. Creatable via `CreateMenuItem` (`specs/restaurant/menu/create-menu-item.md`); editing, deactivating, and categorization remain out of scope. |
-| RestaurantSettings | A minimal per-tenant reference concept for restaurant-specific configuration, starting with `MaxAlcoholicItemQuantityPerLine` (`specs/restaurant/ordering/add-item.md`, BR7). No capability to configure it exists yet — a tenant without a value has no limit. |
+| RestaurantSettings | Aggregate for per-tenant restaurant configuration, currently just `MaxAlcoholicItemQuantityPerLine` (`specs/restaurant/ordering/add-item.md`, BR7). Configurable via `UpdateRestaurantSettings` (`specs/restaurant/settings/update-restaurant-settings.md`); a tenant without a value (or an explicitly cleared one) has no limit. |
 | Table | A physical table in a Restaurant, referenced by `CreateOrder` and owned by the Tables capability (`specs/restaurant/tables/create-table.md`). |
 
 ## Retail
