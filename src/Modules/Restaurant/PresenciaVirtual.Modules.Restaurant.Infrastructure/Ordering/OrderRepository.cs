@@ -124,6 +124,26 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
         return row.ToDomain(items);
     }
 
+    public async Task<Order?> GetOpenByTableAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+
+        const string sql = """
+            SELECT id, tenant_id, table_id, status, created_at, created_by_user_id
+            FROM restaurant.orders
+            WHERE tenant_id = @tenantId AND table_id = @tableId AND status = 'Open';
+            """;
+
+        var row = await connection.QuerySingleOrDefaultAsync<OrderRow>(sql, new { tenantId, tableId });
+        if (row is null)
+        {
+            return null;
+        }
+
+        var items = await orderItemRepository.GetByOrderAsync(tenantId, row.Id, cancellationToken);
+        return row.ToDomain(items);
+    }
+
     // Npgsql returns "timestamptz" as DateTime (UTC), not DateTimeOffset; Dapper's constructor
     // matching requires an exact type match, so the mismatch must be converted explicitly.
     private sealed record OrderRow(Guid Id, Guid Tenant_Id, Guid Table_Id, string Status, DateTime Created_At, Guid Created_By_User_Id)

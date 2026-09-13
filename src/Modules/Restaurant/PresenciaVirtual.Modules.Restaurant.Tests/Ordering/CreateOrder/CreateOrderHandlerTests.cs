@@ -139,6 +139,9 @@ public class CreateOrderHandlerTests
 
         public Task<Order?> GetAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken = default)
             => Task.FromResult(_orders.SingleOrDefault(o => o.TenantId == tenantId && o.Id == orderId));
+
+        public Task<Order?> GetOpenByTableAsync(Guid tenantId, Guid tableId, CancellationToken cancellationToken = default)
+            => Task.FromResult(_orders.SingleOrDefault(o => o.TenantId == tenantId && o.TableId == tableId && o.Status == OrderStatus.Open));
     }
 
     private sealed class FakeIdempotencyStore(Dictionary<(Guid TenantId, string Key), IdempotencyRecord> records) : IIdempotencyStore

@@ -93,6 +93,40 @@ public class RowLevelSecurityTests(ApiFixture fixture)
     }
 
     [Fact]
+    public async Task AppRole_CannotSeeAnotherTenantsOrderOrItsItemsEvenWithoutApplicationFiltering()
+    {
+        // specs/restaurant/ordering/get-order.md's cross-tenant isolation requirement: unlike
+        // the table-read test above, this exercises restaurant.orders and restaurant.order_items
+        // directly (GetOrder's own reads), not only restaurant.tables.
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        var client = fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", TestJwtTokenFactory.CreateToken(ownerTenantId, Guid.NewGuid(), "restaurant.orders.create", "restaurant.orders.additem"));
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, ownerTenantId);
+        var orderResponse = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
+        var orderBody = await orderResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var orderId = orderBody.GetProperty("orderId").GetGuid();
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, ownerTenantId);
+        await client.PostAsJsonAsync($"/api/v1/restaurants/orders/{orderId}/items", new { menuItemId, quantity = 1 });
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+
+        // No "AND tenant_id = ..." on either query, on purpose: a result could only come back if
+        // RLS itself — not application code — were filtering.
+        var visibleOrderId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+            "SELECT id FROM restaurant.orders WHERE id = @orderId;", new { orderId });
+        var visibleItemCount = await connection.ExecuteScalarAsync<long>(
+            "SELECT count(*) FROM restaurant.order_items WHERE order_id = @orderId;", new { orderId });
+
+        Assert.Null(visibleOrderId);
+        Assert.Equal(0, visibleItemCount);
+    }
+
+    [Fact]
     public async Task AppRole_CannotInsertAnOrderItemForAnotherTenant()
     {
         // specs/restaurant/ordering/add-item.md's write-isolation requirement, for the second
