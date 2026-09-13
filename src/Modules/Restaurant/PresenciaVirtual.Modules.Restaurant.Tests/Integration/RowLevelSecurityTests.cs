@@ -74,6 +74,42 @@ public class RowLevelSecurityTests(ApiFixture fixture)
     }
 
     [Fact]
+    public async Task AppRole_CannotInsertOrSeeAnotherTenantsMenuItem()
+    {
+        // specs/restaurant/menu/create-menu-item.md's write-isolation requirement:
+        // restaurant.menu_items has had RLS enabled since add-item.md, but only ever been
+        // exercised as a read (by AddItem's own lookup); this is its first write-isolation test.
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = ownerTenantId.ToString() });
+
+        // A successful same-tenant insert first: without this, a test that only exercises the
+        // cross-tenant attempt below cannot tell "blocked by RLS" apart from "blocked because the
+        // 0014_menu_item_grants.sql migration was never applied" - both fail identically with
+        // InsufficientPrivilege.
+        var ownMenuItemId = Guid.NewGuid();
+        await connection.ExecuteAsync(
+            "INSERT INTO restaurant.menu_items (id, tenant_id, name, price, is_alcoholic) VALUES (@ownMenuItemId, @ownerTenantId, 'Coke', 3.00, false);",
+            new { ownMenuItemId, ownerTenantId });
+
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+
+        // No "AND tenant_id = ..." on purpose: a result could only come back if RLS itself were
+        // filtering, not application code.
+        var visibleId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+            "SELECT id FROM restaurant.menu_items WHERE id = @ownMenuItemId;", new { ownMenuItemId });
+        Assert.Null(visibleId);
+
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => connection.ExecuteAsync(
+            "INSERT INTO restaurant.menu_items (id, tenant_id, name, price, is_alcoholic) VALUES (@id, @ownerTenantId, 'Should be rejected', 1.00, false);",
+            new { id = Guid.NewGuid(), ownerTenantId }));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
+
+    [Fact]
     public async Task AppRole_CannotInsertARowForAnotherTenant()
     {
         // specs/restaurant/tables/create-table.md's write-isolation requirement: CreateTable is
