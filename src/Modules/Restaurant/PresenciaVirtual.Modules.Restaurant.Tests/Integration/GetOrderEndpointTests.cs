@@ -136,20 +136,65 @@ public class GetOrderEndpointTests(ApiFixture fixture)
         Assert.Equal(0m, body.GetProperty("total").GetDecimal());
     }
 
-    [Theory]
-    [InlineData("not-a-guid")]
-    [InlineData("00000000-0000-0000-0000-000000000000")]
-    public async Task AC9_MissingOrMalformedTableId_ReturnsBadRequest(string rawTableId)
+    [Fact]
+    public async Task AC9_MissingTableId_ReturnsBadRequest()
     {
         var tenantId = Guid.NewGuid();
         using var client = AuthenticatedClient(tenantId, GetOrderPermission);
 
-        var response = await client.GetAsync($"/api/v1/restaurants/tables/{rawTableId}/order");
+        // No "?tableId=..." at all - the query string key is genuinely absent, not merely empty.
+        var response = await client.GetAsync("/api/v1/restaurants/orders");
 
         Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
     }
 
-    private static string Endpoint(Guid tableId) => $"/api/v1/restaurants/tables/{tableId}/order";
+    [Theory]
+    [InlineData("not-a-guid")]
+    [InlineData("00000000-0000-0000-0000-000000000000")]
+    public async Task AC9_MalformedOrEmptyTableId_ReturnsBadRequest(string rawTableId)
+    {
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, GetOrderPermission);
+
+        var response = await client.GetAsync($"/api/v1/restaurants/orders?tableId={rawTableId}");
+
+        Assert.Equal(HttpStatusCode.BadRequest, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task MultipleAndMergedLines_ReturnsAllLinesAndTheCorrectTotal()
+    {
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, CreateOrderPermission, AddItemPermission, GetOrderPermission);
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantId);
+        var orderId = await CreateOpenOrderAsync(client, tableId);
+        var menuItemA = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, tenantId, price: 3m);
+        var menuItemB = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, tenantId, price: 4m);
+        var itemsEndpoint = $"/api/v1/restaurants/orders/{orderId}/items";
+        // Two AddItem calls for menuItemA (merged into one line, per add-item.md BR4) plus one
+        // for a distinct menuItemB - a regression that drops a line, or sums only the last
+        // AddItem call's items instead of the order's persisted rows, would still pass a
+        // single-line assertion but not this one.
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(itemsEndpoint, new { menuItemId = menuItemA, quantity = 1 })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(itemsEndpoint, new { menuItemId = menuItemA, quantity = 1 })).StatusCode);
+        Assert.Equal(HttpStatusCode.OK, (await client.PostAsJsonAsync(itemsEndpoint, new { menuItemId = menuItemB, quantity = 1 })).StatusCode);
+
+        var response = await client.GetAsync(Endpoint(tableId));
+
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        var body = await response.Content.ReadFromJsonAsync<JsonElement>();
+        var lines = body.GetProperty("items").EnumerateArray().ToList();
+        Assert.Equal(2, lines.Count);
+        var lineA = lines.Single(l => l.GetProperty("menuItemId").GetGuid() == menuItemA);
+        Assert.Equal(2, lineA.GetProperty("quantity").GetInt32());
+        Assert.Equal(6m, lineA.GetProperty("lineTotal").GetDecimal());
+        var lineB = lines.Single(l => l.GetProperty("menuItemId").GetGuid() == menuItemB);
+        Assert.Equal(1, lineB.GetProperty("quantity").GetInt32());
+        Assert.Equal(4m, lineB.GetProperty("lineTotal").GetDecimal());
+        Assert.Equal(10m, body.GetProperty("total").GetDecimal());
+    }
+
+    private static string Endpoint(Guid tableId) => $"/api/v1/restaurants/orders?tableId={tableId}";
 
     private async Task<Guid> CreateOpenOrderAsync(HttpClient client, Guid tableId)
     {

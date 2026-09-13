@@ -1,3 +1,4 @@
+using System.Net;
 using System.Net.Http.Headers;
 using System.Net.Http.Json;
 using System.Text.Json;
@@ -109,7 +110,10 @@ public class RowLevelSecurityTests(ApiFixture fixture)
         var orderBody = await orderResponse.Content.ReadFromJsonAsync<JsonElement>();
         var orderId = orderBody.GetProperty("orderId").GetGuid();
         var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, ownerTenantId);
-        await client.PostAsJsonAsync($"/api/v1/restaurants/orders/{orderId}/items", new { menuItemId, quantity = 1 });
+        var addItemResponse = await client.PostAsJsonAsync($"/api/v1/restaurants/orders/{orderId}/items", new { menuItemId, quantity = 1 });
+        // Without this, a broken AddItem call would silently leave order_items empty and this
+        // test would still pass (0 visible rows either way) without ever exercising its isolation.
+        Assert.Equal(HttpStatusCode.OK, addItemResponse.StatusCode);
 
         await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
         await connection.OpenAsync();

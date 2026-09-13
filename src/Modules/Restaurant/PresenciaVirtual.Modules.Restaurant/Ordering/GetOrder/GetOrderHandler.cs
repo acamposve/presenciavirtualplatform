@@ -15,7 +15,7 @@ public sealed class GetOrderHandler(
         var tableExists = await tableRepository.ExistsForTenantAsync(tenantId, query.TableId, cancellationToken);
         if (!tableExists)
         {
-            throw new TableNotFoundException(query.TableId);
+            throw new GetOrderTableNotFoundException(query.TableId);
         }
 
         var order = await orderRepository.GetOpenByTableAsync(tenantId, query.TableId, cancellationToken)
