@@ -1,12 +1,12 @@
 # Specification: Menu / CreateMenuItem
 
-**Status:** Draft
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Menu
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
 **Last Updated:** 2026-09-13
 
-This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4.
+This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4. Approved after two rounds of review (grants migration, price range/precision, RLS test rigor, and actor/role wording), in [PR #17](https://github.com/acamposve/presenciavirtualplatform/pull/17).
 
 ---
 
