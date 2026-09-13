@@ -90,6 +90,7 @@ The endpoint is `PUT /api/v1/restaurants/settings`, reflecting that this is a fu
 | Authenticated but missing `restaurant.settings.update` | 403 Forbidden |
 | `MaxAlcoholicItemQuantityPerLine` missing from the request body | 400 Bad Request |
 | `MaxAlcoholicItemQuantityPerLine` present and non-null, but zero, negative, or greater than `2,147,483,647` | 400 Bad Request |
+| `MaxAlcoholicItemQuantityPerLine` present but not an integer or `null` (e.g. a fractional number, a string, or a boolean) | 400 Bad Request |
 
 Internal implementation details MUST NOT be exposed in any error response, per `constitution.md` Article VIII and `architecture.md` §26.
 
