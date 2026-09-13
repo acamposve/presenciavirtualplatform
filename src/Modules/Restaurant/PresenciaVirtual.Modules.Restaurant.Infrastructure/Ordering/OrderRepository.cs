@@ -194,14 +194,14 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
             throw new CloseOrderNotFoundException(orderId);
         }
 
-        var items = (await connection.QueryAsync<OrderItem>(ItemsSql, new { tenantId, orderId }, transaction)).ToList();
-        var order = row.ToDomain(items);
-
         try
         {
             // BR1: the domain-level invariant, enforced independently of the database-level
-            // guard below - both must agree for the transition to actually happen.
-            order = order.Close();
+            // guard below - both must agree for the transition to actually happen. Items are
+            // irrelevant to this check (Close() only inspects Status), so an empty placeholder
+            // list is used here; the real items are (re-)read after the transition below, per
+            // Data Requirements, and used to build the value this method actually returns.
+            row.ToDomain([]).Close();
         }
         catch (InvalidOperationException)
         {
@@ -209,11 +209,26 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
             throw new OrderAlreadyClosedException(orderId);
         }
 
-        // BR4: belt-and-suspenders alongside the lock above - even if the lock were somehow
-        // bypassed, this conditional UPDATE cannot silently corrupt an already-closed order.
-        await connection.ExecuteAsync(
+        // BR4: belt-and-suspenders alongside the lock above - the affected-row count is what
+        // actually makes this a guard rather than a no-op: if the row were no longer Open (e.g.
+        // the lock were somehow bypassed), this must not proceed to claim the key and commit as
+        // if a transition had occurred.
+        var rowsAffected = await connection.ExecuteAsync(
             "UPDATE restaurant.orders SET status = 'Closed' WHERE tenant_id = @tenantId AND id = @orderId AND status = 'Open';",
             new { tenantId, orderId }, transaction);
+
+        if (rowsAffected != 1)
+        {
+            transaction.Rollback();
+            throw new OrderAlreadyClosedException(orderId);
+        }
+
+        // Read after the UPDATE, still within this same open transaction (Data Requirements):
+        // this is what lets a concurrent AddItem that legitimately committed just before this
+        // UPDATE (AC13's "both succeed" case) actually show up in the response this method
+        // returns, rather than a stale pre-transition read.
+        var items = (await connection.QueryAsync<OrderItem>(ItemsSql, new { tenantId, orderId }, transaction)).ToList();
+        var order = Order.Reconstruct(row.Id, row.Tenant_Id, row.Table_Id, row.Created_By_User_Id, new DateTimeOffset(DateTime.SpecifyKind(row.Created_At, DateTimeKind.Utc)), OrderStatus.Closed, items);
 
         if (idempotencyKey is { Length: > 0 } keyToClaim)
         {

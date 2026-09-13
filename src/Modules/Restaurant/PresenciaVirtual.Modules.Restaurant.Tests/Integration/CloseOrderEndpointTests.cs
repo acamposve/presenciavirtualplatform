@@ -49,6 +49,19 @@ public class CloseOrderEndpointTests(ApiFixture fixture)
     }
 
     [Fact]
+    public async Task AC2_MalformedOrderId_ReturnsNotFound()
+    {
+        // The {orderId:guid} route constraint is what makes this 404 (route mismatch) rather
+        // than a 400 from model binding - see close-order.md's Error Scenarios note.
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, ClosePermission);
+
+        var response = await client.PostAsync("/api/v1/restaurants/orders/not-a-guid/close", null);
+
+        Assert.Equal(HttpStatusCode.NotFound, response.StatusCode);
+    }
+
+    [Fact]
     public async Task AC2_OrderBelongingToAnotherTenant_ReturnsNotFound()
     {
         var ownerTenantId = Guid.NewGuid();
@@ -131,6 +144,28 @@ public class CloseOrderEndpointTests(ApiFixture fixture)
         await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, CloseEndpoint(orderA)) { Headers = { { "Idempotency-Key", "shared-key" } } });
 
         var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, CloseEndpoint(orderB)) { Headers = { { "Idempotency-Key", "shared-key" } } });
+
+        Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
+    }
+
+    [Fact]
+    public async Task AC7_ReusingTheIdempotencyKeyForANonexistentCrossTenantOrder_ReturnsConflictNotNotFound()
+    {
+        // BR3: the claim check MUST run before resolving the second OrderId at all, so this
+        // returns 409 even though orderB - deliberately a different tenant's order, which is
+        // also nonexistent from the caller's own perspective - would 404 on its own (AC2). A
+        // regression that resolved the target first would return 404 here instead.
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, CreateOrderPermission, ClosePermission);
+        var tableA = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantId);
+        var orderA = await CreateOpenOrderAsync(client, tableA);
+        await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, CloseEndpoint(orderA)) { Headers = { { "Idempotency-Key", "cross-tenant-shared-key" } } });
+
+        var otherTenantId = Guid.NewGuid();
+        using var otherTenantClient = AuthenticatedClient(otherTenantId, CreateOrderPermission);
+        var tableB = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, otherTenantId);
+        var orderB = await CreateOpenOrderAsync(otherTenantClient, tableB);
+        var response = await client.SendAsync(new HttpRequestMessage(HttpMethod.Post, CloseEndpoint(orderB)) { Headers = { { "Idempotency-Key", "cross-tenant-shared-key" } } });
 
         Assert.Equal(HttpStatusCode.Conflict, response.StatusCode);
     }
@@ -289,6 +324,47 @@ public class CloseOrderEndpointTests(ApiFixture fixture)
             // The close committed first - AddItem must not have landed anything.
             Assert.Empty(finalItems);
         }
+    }
+
+    [Fact]
+    public async Task AC13_AddItemCommittingBeforeClose_BothSucceedAndTheItemIsIncluded()
+    {
+        // Deterministic complement to the genuinely-concurrent test above: that one only proves
+        // whichever interleaving the scheduler happens to produce on a given run, so it cannot by
+        // itself guarantee this specific ordering (AddItem-then-close) is ever actually exercised.
+        // Running the two calls sequentially instead pins this branch of AC13 down explicitly.
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, CreateOrderPermission, AddItemPermission, ClosePermission);
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantId);
+        var orderId = await CreateOpenOrderAsync(client, tableId);
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, tenantId, price: 5m);
+
+        var addItemResponse = await client.PostAsJsonAsync(ItemsEndpoint(orderId), new { menuItemId, quantity = 1 });
+        var closeResponse = await client.PostAsync(CloseEndpoint(orderId), null);
+
+        Assert.Equal(HttpStatusCode.OK, addItemResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.OK, closeResponse.StatusCode);
+        var closeBody = await closeResponse.Content.ReadFromJsonAsync<JsonElement>();
+        var line = Assert.Single(closeBody.GetProperty("items").EnumerateArray());
+        Assert.Equal(menuItemId, line.GetProperty("menuItemId").GetGuid());
+    }
+
+    [Fact]
+    public async Task AC13_CloseCommittingBeforeAddItem_TheLaterAddItemIsRejected()
+    {
+        // Deterministic complement covering the other required ordering (close-then-AddItem).
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, CreateOrderPermission, AddItemPermission, ClosePermission);
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, tenantId);
+        var orderId = await CreateOpenOrderAsync(client, tableId);
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, tenantId);
+
+        var closeResponse = await client.PostAsync(CloseEndpoint(orderId), null);
+        var addItemResponse = await client.PostAsJsonAsync(ItemsEndpoint(orderId), new { menuItemId, quantity = 1 });
+
+        Assert.Equal(HttpStatusCode.OK, closeResponse.StatusCode);
+        Assert.Equal(HttpStatusCode.Conflict, addItemResponse.StatusCode);
+        Assert.Empty(await GetOrderItemsDirectlyAsync(tenantId, orderId));
     }
 
     private static string CloseEndpoint(Guid orderId) => $"/api/v1/restaurants/orders/{orderId}/close";
