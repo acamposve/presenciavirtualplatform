@@ -32,7 +32,8 @@ public class UpdateRestaurantSettingsEndpointTests(ApiFixture fixture)
     [Fact]
     public async Task AC2_HappyPath_UpdatingAnExistingValue()
     {
-        using var client = AuthenticatedClient(Guid.NewGuid(), UpdatePermission);
+        var tenantId = Guid.NewGuid();
+        using var client = AuthenticatedClient(tenantId, UpdatePermission);
         await client.PutAsJsonAsync(Endpoint, new { maxAlcoholicItemQuantityPerLine = 5 });
 
         var response = await client.PutAsJsonAsync(Endpoint, new { maxAlcoholicItemQuantityPerLine = 10 });
@@ -40,6 +41,10 @@ public class UpdateRestaurantSettingsEndpointTests(ApiFixture fixture)
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         Assert.Equal(10, body.GetProperty("maxAlcoholicItemQuantityPerLine").GetInt32());
+        // Regression check: the handler builds its response from the in-memory aggregate it just
+        // constructed, not a re-read from the database - so a broken/no-op UpsertAsync could
+        // still echo back the "right" value here. Confirm the row was actually replaced.
+        Assert.Equal(10, await GetPersistedLimitDirectlyAsync(tenantId));
     }
 
     [Fact]
@@ -221,6 +226,17 @@ public class UpdateRestaurantSettingsEndpointTests(ApiFixture fixture)
         var response = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
         var body = await response.Content.ReadFromJsonAsync<JsonElement>();
         return body.GetProperty("orderId").GetGuid();
+    }
+
+    private async Task<int?> GetPersistedLimitDirectlyAsync(Guid tenantId)
+    {
+        await using var connection = new NpgsqlConnection(fixture.ConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = tenantId.ToString() });
+
+        return await connection.ExecuteScalarAsync<int?>(
+            "SELECT max_alcoholic_item_quantity_per_line FROM restaurant.settings WHERE tenant_id = @tenantId;",
+            new { tenantId });
     }
 
     private async Task<int> GetLineQuantityDirectlyAsync(Guid tenantId, Guid orderId, Guid menuItemId)
