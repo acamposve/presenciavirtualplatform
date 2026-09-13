@@ -123,7 +123,7 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 
 - **Depends on:** Core Identity & Authentication, Core Authorization/RBAC, tenant isolation infrastructure (ADR 0002) — the same minimal Core slice `CreateOrder`, `CreateTable`, `AddItem`, `GetOrder`, and `CloseOrder` depend on.
 - **Does not depend on:** Core Organization/Location, Core Platform Billing, Notifications, Kitchen, Payments, Inventory, full Menu Management, full Restaurant Settings management.
-- **Publishes:** an `OrderCancelled` domain event is defined for architectural consistency with `architecture.md` §15 and `create-order.md`'s/`close-order.md`'s own treatment of their domain events — this specification does not require any subscriber to exist yet; consumption (e.g. by a future reporting capability distinguishing paid revenue from voided orders) is deferred until one exists.
+- **Publishes:** an `OrderCancelled` domain event is defined for architectural consistency with `architecture.md` §15 and `create-order.md`'s and `close-order.md`'s own treatment of their domain events — this specification does not require any subscriber to exist yet; consumption (e.g. by a future reporting capability distinguishing paid revenue from voided orders) is deferred until one exists.
 - **Consumes:** none.
 
 ## Testing Requirements
