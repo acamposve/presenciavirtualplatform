@@ -1,12 +1,12 @@
 # Specification: Menu / GetMenuItems
 
-**Status:** Draft
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Menu
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
 **Last Updated:** 2026-10-20
 
-This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4.
+This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4. Approved after an author self-review — the same contributor wrote the draft and this approval, so this is recorded as a self-review rather than an independent one. That review round (commit on [PR #30](https://github.com/acamposve/presenciavirtualplatform/pull/30)) pinned the route, excluded `TenantId` from the response, made `page`/`pageSize` default independently, added AC6b so `pageSize=200` cannot be rejected by an off-by-one, and documented the collation assumption behind `lower(name)` ordering.
 
 ---
 
