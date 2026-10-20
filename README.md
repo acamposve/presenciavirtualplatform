@@ -1,5 +1,7 @@
 # Presencia Virtual Platform
 
+[![CI](https://github.com/acamposve/presenciavirtualplatform/actions/workflows/ci.yml/badge.svg)](https://github.com/acamposve/presenciavirtualplatform/actions/workflows/ci.yml)
+
 Presencia Virtual Platform is a modular business software platform developed by Presencia Virtual.
 
 It provides reusable technological capabilities and domain-specific solutions for different business verticals, initially:
@@ -94,6 +96,8 @@ dotnet test src/PresenciaVirtual.slnx
 ```
 
 Integration tests spin up their own ephemeral PostgreSQL container via [Testcontainers](https://testcontainers.com/) — Docker must be running, but `docker compose up` is not required for tests.
+
+The same suite runs on every pull request and every push to `main` via [`.github/workflows/ci.yml`](.github/workflows/ci.yml): restore, a `Release` build with warnings treated as errors, and the full unit + integration suite against a real PostgreSQL container. Merging without a green run is a repository-settings decision (see [`development-workflow.md`](development-workflow.md)), not something the pipeline can enforce on its own.
 
 ## Contributing
 
