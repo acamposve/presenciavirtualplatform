@@ -1,12 +1,12 @@
 # Specification: Ordering / RemoveItem
 
-**Status:** Draft
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Ordering
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
 **Last Updated:** 2026-10-20
 
-This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4.
+This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4. Approved after an author self-review against the existing Ordering specifications and their implementations — recorded as such rather than as an independent review, since the draft's author and this approval are the same contributor. That pass corrected four gaps (response shape, error precedence, the validation row, and delete-side RLS coverage), all visible in the approval diff, in [PR #28](https://github.com/acamposve/presenciavirtualplatform/pull/28).
 
 ---
 
@@ -44,7 +44,7 @@ Reducing a line's quantity without removing it (e.g. "4 × Coke, make it 2") is 
 4. The system MUST reject the request if the order does not currently have a line for the given `MenuItemId`, including the case where the line was already removed by an earlier request.
 5. Removing a line MUST delete that line entirely — it is not a quantity reduction, and it does not zero or re-price the line. A later `AddItem` for the same menu item starts a new line, snapshotted at the menu item's price at that later time (per `add-item.md` BR3/BR4).
 6. The system MUST leave every other line, its quantity, and its `UnitPriceSnapshot` untouched.
-7. The system MUST return the order's current items and total after the line is removed.
+7. The system MUST return the order's current items and total after the line is removed, in the same response shape `AddItem` already returns (`OrderId`, `Items`, `Total`) — the order's own status and creation fields are unaffected by this capability and are not part of the response.
 8. The system MUST support an optional `Idempotency-Key` request header, with the same semantics as `CreateOrder`'s, `AddItem`'s, `CloseOrder`'s and `CancelOrder`'s: a repeated request with the same key that matches the original request does not attempt to remove the line a second time (which would otherwise fail as "line not found"); it returns the order's current state instead.
 
 ## Non-Functional Requirements
@@ -108,10 +108,13 @@ No new term needs to be added to `glossary.md`; if approved, its `OrderItem` ent
 |---|---|
 | No authentication | 401 Unauthorized |
 | Authenticated but missing `restaurant.orders.removeitem` | 403 Forbidden |
+| `Idempotency-Key` supplied with an empty value, or longer than 200 characters | 400 Bad Request |
 | `OrderId` does not exist, belongs to a different tenant, or is malformed | 404 Not Found |
 | Order exists but has no line for that `MenuItemId`, or the line was already removed | 404 Not Found |
 | Order exists but is not `Open` | 409 Conflict |
 | `Idempotency-Key` reused with a different `OrderId` or `MenuItemId` | 409 Conflict |
+
+Where both a status conflict and a missing line could apply — an order that is not `Open` *and* has no line for that `MenuItemId` — the status conflict (409) takes precedence, mirroring `add-item.md`'s order of checks (order existence, then status, then item): a closed order's contents are final regardless of whether the specific line is still present, so reporting 404 would misleadingly imply the order is still open.
 
 A malformed `OrderId` or `MenuItemId` fails the route's `:guid` constraint before reaching the handler at all, so it is always 404 regardless of any `Idempotency-Key` — the same reasoning `close-order.md` and `cancel-order.md` give in full. When an `Idempotency-Key` is supplied, BR6's claim check runs before order and line resolution, so a key already used for a different order or item always returns 409, never 404.
 
@@ -119,7 +122,7 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 
 ## Data Requirements
 
-- **Reads:** the referenced Order (to check BR1's status), scoped to the caller's tenant; and, to build the response per FR7, its remaining `OrderItem` rows. Both reads MUST happen within the same transaction as the delete (the items read *after* the delete), so the response never includes a line that was concurrently removed or omits one that was concurrently added while the order lock was held.
+- **Reads:** the referenced Order (to check BR1's status), scoped to the caller's tenant; and, to build the response per FR7, its remaining `OrderItem` rows. The order read, the delete, the items read and the idempotency-claim insert (when a key is supplied) MUST all happen inside one transaction, with the items read *after* the delete — so the response never includes a line that was concurrently removed, or omits one that was concurrently added while the order lock was held.
 - **Writes:** exactly one `order_items` row is deleted, identified by `(tenant_id, order_id, menu_item_id)`. No other column and no other table changes: the order's own row is untouched, and no `Total` column exists to update (BR7).
 - The delete MUST be guarded at the database level by the affected-row count (BR5), so BR2/BR5's "exactly one line, exactly once" guarantee does not depend solely on an application-level pre-check.
 - **A grants migration is required:** `0010_add_item_grants.sql` granted the least-privilege application role `SELECT, INSERT, UPDATE` on `restaurant.order_items` — deliberately **not** `DELETE`, because AddItem never deletes. RemoveItem is the first capability in the module that deletes from this table, so a new grants migration MUST add `DELETE` on `restaurant.order_items` to `presenciavirtual_app`; without it the delete fails with `InsufficientPrivilege` rather than working at all.
@@ -143,6 +146,7 @@ Internal implementation details MUST NOT be exposed in any error response, per `
   - Cross-tenant isolation for the order lookup and line deletion (per ADR 0002 rule 8), following the pattern established in `close-order.md`'s and `cancel-order.md`'s own reviews.
   - **Cross-tenant isolation for the new idempotency table:** a direct RLS read/write-isolation test for `remove_item_idempotency_keys` (both the `SELECT` and the `WITH CHECK` insert side), following `RowLevelSecurityTests.cs`'s established pattern — including a successful same-tenant insert first, so a failure can only mean RLS blocked it rather than the grants migration never having been applied.
   - **Delete grant:** coverage that proves the app role can actually delete from `restaurant.order_items` — i.e. AC1 failing with `InsufficientPrivilege` rather than 200 if the grants migration were missing.
+  - **Cross-tenant delete isolation (ADR 0002 rule 8):** `RemoveItem` is the first capability to `DELETE` from `restaurant.order_items`, so the `USING` side of RLS must also be proven for deletion — a delete issued under another tenant's context MUST affect zero rows and leave the row in place, rather than relying on the application's own tenant filter.
   - Idempotency replay and conflict (AC8/AC9), following the same pattern as `close-order.md`.
   - **Validation (AC2/AC5's malformed-identifier cases):** malformed `OrderId` and malformed `MenuItemId` are each rejected as 404, following `close-order.md`'s own precedent test.
   - **Concurrent removals of the same line (BR5, AC12):** two simultaneous remove requests must result in exactly one success and one Not Found — proving the affected-row-count guard, not a read-then-write race.
