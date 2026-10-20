@@ -1,12 +1,12 @@
 # Specification: Tables / CreateTable
 
-**Status:** Draft — Pending Review
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Tables
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
-**Last Updated:** 2026-09-12
+**Last Updated:** 2026-10-20
 
-This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4.
+This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4. Approved retroactively: its implementation had already been merged in [PR #7](https://github.com/acamposve/presenciavirtualplatform/pull/7) while this line still read `Draft — Pending Review`, which left `main` carrying an implemented-but-unapproved specification. Rather than rewrite history, this approval records the missing step — the specification was reviewed against what actually shipped, and its functional requirements, business rules, error scenarios and testing requirements (including both the read and the write RLS cases) match the merged implementation.
 
 ---
 
