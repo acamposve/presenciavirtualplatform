@@ -51,4 +51,20 @@ public interface IOrderRepository
     /// read within the same transaction as the transition, before it commits.
     /// </summary>
     Task<Order> CancelAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Removes one line from an Open order (specs/restaurant/ordering/remove-item.md).
+    /// Implementations MUST check an Idempotency-Key claim (if supplied) BEFORE resolving whether
+    /// OrderId or MenuItemId exist (BR6), throwing
+    /// <see cref="RemoveItem.RemoveItemOrderNotFoundException"/> if the order does not exist
+    /// within the tenant (AC2), <see cref="RemoveItem.OrderNotRemovableException"/> if it is not
+    /// Open (BR1/AC3), <see cref="RemoveItem.OrderItemNotFoundException"/> if there is no line for
+    /// that menu item or it was already removed (AC4/BR5), and
+    /// <see cref="RemoveItem.RemoveItemIdempotencyKeyConflictException"/> if the key was already
+    /// used for a different order or item (BR6). The delete MUST be guarded by the affected-row
+    /// count (BR5) and MUST serialize against every other mutation of the same order via the
+    /// shared order-scoped lock (BR4), acquired in the same order those capabilities already use.
+    /// The remaining items MUST be read within the same transaction as the delete, after it.
+    /// </summary>
+    Task<Order> RemoveItemAsync(Guid tenantId, Guid orderId, Guid menuItemId, string? idempotencyKey, CancellationToken cancellationToken = default);
 }

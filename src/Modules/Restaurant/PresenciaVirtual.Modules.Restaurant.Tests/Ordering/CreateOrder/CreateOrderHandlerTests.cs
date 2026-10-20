@@ -148,6 +148,9 @@ public class CreateOrderHandlerTests
 
         public Task<Order> CancelAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("Not used by CreateOrderHandler.");
+
+        public Task<Order> RemoveItemAsync(Guid tenantId, Guid orderId, Guid menuItemId, string? idempotencyKey, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by CreateOrderHandler.");
     }
 
     private sealed class FakeIdempotencyStore(Dictionary<(Guid TenantId, string Key), IdempotencyRecord> records) : IIdempotencyStore

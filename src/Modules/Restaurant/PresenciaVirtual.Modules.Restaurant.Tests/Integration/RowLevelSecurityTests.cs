@@ -372,4 +372,95 @@ public class RowLevelSecurityTests(ApiFixture fixture)
             new { ownerTenantId, orderId }));
         Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
     }
+
+    [Fact]
+    public async Task AppRole_CannotDeleteAnotherTenantsOrderItem_ButCanDeleteItsOwn()
+    {
+        // specs/restaurant/ordering/remove-item.md is the first capability in the module to DELETE
+        // from restaurant.order_items (AddItem only ever inserts/updates, which is why
+        // 0010_add_item_grants.sql never granted DELETE). This proves both halves at once:
+        // the DELETE grant exists (the same-tenant delete below succeeds), and the USING side of
+        // RLS filters a delete issued under the wrong tenant context down to zero rows.
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        var client = fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", TestJwtTokenFactory.CreateToken(ownerTenantId, Guid.NewGuid(), "restaurant.orders.create", "restaurant.orders.additem"));
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, ownerTenantId);
+        var orderResponse = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
+        var orderId = (await orderResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("orderId").GetGuid();
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, ownerTenantId);
+        var addItemResponse = await client.PostAsJsonAsync($"/api/v1/restaurants/orders/{orderId}/items", new { menuItemId, quantity = 1 });
+        // Without this, a broken AddItem call would leave order_items empty and the cross-tenant
+        // delete below would "affect zero rows" for the wrong reason.
+        Assert.Equal(HttpStatusCode.OK, addItemResponse.StatusCode);
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+
+        // Delete issued under the wrong tenant: the row is invisible, so the statement succeeds
+        // but affects nothing (the USING clause of the policy, not a raised error).
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+        var crossTenantDelete = await connection.ExecuteAsync(
+            "DELETE FROM restaurant.order_items WHERE order_id = @orderId;", new { orderId });
+        Assert.Equal(0, crossTenantDelete);
+
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = ownerTenantId.ToString() });
+        var visibleCount = await connection.ExecuteScalarAsync<long>(
+            "SELECT count(*) FROM restaurant.order_items WHERE order_id = @orderId;", new { orderId });
+        Assert.Equal(1, visibleCount);
+
+        // Same tenant: the delete actually works, proving 0020_remove_item_grants.sql granted it.
+        var ownDelete = await connection.ExecuteAsync(
+            "DELETE FROM restaurant.order_items WHERE order_id = @orderId;", new { orderId });
+        Assert.Equal(1, ownDelete);
+    }
+
+    [Fact]
+    public async Task AppRole_CannotSeeOrInsertAnotherTenantsRemoveItemIdempotencyKey()
+    {
+        // specs/restaurant/ordering/remove-item.md's cross-tenant isolation requirement for its
+        // own new table (remove_item_idempotency_keys) - both the read and the WITH CHECK insert
+        // side, following the same pattern as the close-order and cancel-order tests above.
+        var ownerTenantId = Guid.NewGuid();
+        var otherTenantId = Guid.NewGuid();
+
+        var client = fixture.CreateClient();
+        client.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue(
+            "Bearer", TestJwtTokenFactory.CreateToken(ownerTenantId, Guid.NewGuid(), "restaurant.orders.create", "restaurant.orders.additem", "restaurant.orders.removeitem"));
+        var tableId = await TestTableSeeder.SeedTableAsync(fixture.ConnectionString, ownerTenantId);
+        var orderResponse = await client.PostAsJsonAsync("/api/v1/restaurants/orders", new { tableId });
+        var orderId = (await orderResponse.Content.ReadFromJsonAsync<JsonElement>()).GetProperty("orderId").GetGuid();
+        var menuItemId = await TestMenuItemSeeder.SeedMenuItemAsync(fixture.ConnectionString, ownerTenantId);
+        await client.PostAsJsonAsync($"/api/v1/restaurants/orders/{orderId}/items", new { menuItemId, quantity = 1 });
+        var removeResponse = await client.SendAsync(new HttpRequestMessage(HttpMethod.Delete, $"/api/v1/restaurants/orders/{orderId}/items/{menuItemId}")
+        {
+            Headers = { { "Idempotency-Key", "rls-remove-test-key" } },
+        });
+        Assert.Equal(HttpStatusCode.OK, removeResponse.StatusCode);
+
+        await using var connection = new NpgsqlConnection(fixture.AppRoleConnectionString);
+        await connection.OpenAsync();
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+
+        // No "AND tenant_id = ..." on purpose: a result could only come back if RLS itself were
+        // filtering, not application code.
+        var visibleOrderId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+            "SELECT order_id FROM restaurant.remove_item_idempotency_keys WHERE idempotency_key = 'rls-remove-test-key';");
+        Assert.Null(visibleOrderId);
+
+        // A successful same-tenant insert first, so a failure below can only mean RLS blocked it
+        // rather than the 0020_remove_item_grants.sql migration never having been applied.
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = ownerTenantId.ToString() });
+        await connection.ExecuteAsync(
+            "INSERT INTO restaurant.remove_item_idempotency_keys (tenant_id, idempotency_key, order_id, menu_item_id) VALUES (@ownerTenantId, 'rls-remove-test-key-own', @orderId, @menuItemId);",
+            new { ownerTenantId, orderId, menuItemId });
+
+        await connection.ExecuteAsync("SELECT set_config('app.tenant_id', @tenantId, false);", new { tenantId = otherTenantId.ToString() });
+        var exception = await Assert.ThrowsAsync<PostgresException>(() => connection.ExecuteAsync(
+            "INSERT INTO restaurant.remove_item_idempotency_keys (tenant_id, idempotency_key, order_id, menu_item_id) VALUES (@ownerTenantId, 'rls-remove-test-key-2', @orderId, @menuItemId);",
+            new { ownerTenantId, orderId, menuItemId }));
+        Assert.Equal(PostgresErrorCodes.InsufficientPrivilege, exception.SqlState);
+    }
 }
