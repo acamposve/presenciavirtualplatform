@@ -123,6 +123,9 @@ public class AddItemHandlerTests
         public Task<Order> CloseAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("Not used by AddItemHandler.");
 
+        public Task<Order> CancelAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by AddItemHandler.");
+
         public async Task<Order?> GetAsync(Guid tenantId, Guid orderId, CancellationToken cancellationToken = default)
         {
             var order = _orders.SingleOrDefault(o => o.TenantId == tenantId && o.Id == orderId);

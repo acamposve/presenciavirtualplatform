@@ -36,4 +36,19 @@ public interface IOrderRepository
     /// it commits.
     /// </summary>
     Task<Order> CloseAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default);
+
+    /// <summary>
+    /// Cancels an Open order (specs/restaurant/ordering/cancel-order.md). Implementations MUST
+    /// check an Idempotency-Key claim (if supplied) BEFORE resolving whether OrderId exists
+    /// (BR3), throwing <see cref="CancelOrder.CancelOrderNotFoundException"/> if the order does
+    /// not exist within the tenant, <see cref="CancelOrder.OrderNotCancellableException"/> if it
+    /// is not Open — already Closed (AC4), already Cancelled (AC3), or lost a concurrent race
+    /// (BR4) — and <see cref="CancelOrder.CancelOrderIdempotencyKeyConflictException"/> if the
+    /// key was already used for a different order (BR3). The Open -> Cancelled transition MUST
+    /// acquire the same order-scoped lock <see cref="CloseAsync"/> and AddItem use (BR7), MUST
+    /// guard itself with a conditional update so only one concurrent transition can apply (BR4),
+    /// and MUST NOT touch the order's items or total (BR2/BR5). The returned Order's items MUST be
+    /// read within the same transaction as the transition, before it commits.
+    /// </summary>
+    Task<Order> CancelAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default);
 }
