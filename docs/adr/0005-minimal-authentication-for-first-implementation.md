@@ -34,4 +34,4 @@ For this first implementation, adopt the minimum mechanism that is genuinely fun
 
 ## Status
 
-Accepted.
+Accepted. **Amended by [ADR 0006](0006-core-identity-local-credentials-and-token-issuance.md):** the decision that "no token issuance endpoint is implemented" is superseded — that ADR introduces issuance. This ADR's token shape, claim set, and validation decisions remain in force and are reused unchanged.
