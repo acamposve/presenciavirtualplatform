@@ -33,11 +33,11 @@ CreateTable → ListTables → CreateOrder ─→ AddItem → (Kitchen) → Clos
 
 ## Functional Requirements
 
-1. An authorized user MUST be able to retrieve a page of the tables belonging to their own tenant.
+1. An authorized user MUST be able to retrieve a page of the tables belonging to their own tenant, via `GET /api/v1/restaurants/tables` — the same collection route group `CreateTable` already uses for `POST`.
 2. The response MUST contain, for each table, its `TableId`, `Label`, and `CreatedAt`. `TenantId` is persisted and enforced server-side but is not part of the response body, consistent with `CreateTable`'s response shape (its AC1 already states this explicitly).
 3. The response MUST be paginated: it MUST accept an optional 1-based `page` and an optional `pageSize`, and MUST report the requested `page`, the effective `pageSize`, and the tenant's `totalCount` of tables — the same pagination contract `GetMenuItems` defines, deliberately kept identical so a client pages both resources the same way.
 4. The system MUST reject a `page` below 1, a `pageSize` below 1, or a `pageSize` above 200, as a validation error — never silently clamp or default an invalid value.
-5. When `page` or `pageSize` is omitted, the system MUST default them to `page` = 1 and `pageSize` = 50.
+5. When `page` or `pageSize` is omitted, the system MUST default each independently — `page` to 1, `pageSize` to 50 — so supplying only one of the two still yields a well-defined request.
 6. The response MUST be deterministically ordered by `Label` (case-insensitive ascending), with `TableId` ascending as the tiebreaker, so that paging over an unchanging set cannot repeat or skip a table. Floor sections, zones, and manual display order are out of scope (see Out of Scope).
 7. A tenant with no tables — and a `page` beyond the last page — MUST both return an empty `items` array with `totalCount` still reported correctly, not an error.
 8. The response MUST reflect the tenant's tables as of the time of the request: a table created by a prior `CreateTable` call MUST be visible to a subsequent `ListTables` request, and therefore immediately usable by `CreateOrder` (`create-table.md`'s own Consistency requirement).
@@ -66,6 +66,7 @@ CreateTable → ListTables → CreateOrder ─→ AddItem → (Kitchen) → Clos
 - **AC4 — Pagination:** Given a tenant with more tables than `pageSize`, when the user requests `page=1` then `page=2` with the same `pageSize`, then the two pages contain disjoint tables, in the same deterministic order, and `totalCount` is identical in both responses.
 - **AC5 — Page beyond the end:** Given a `page` greater than the number of pages for that tenant, when the user requests it, then the response is 200 with an empty `items` array and the correct `totalCount`.
 - **AC6 — Invalid paging values:** Given `page` = 0, `page` = -1, `pageSize` = 0, `pageSize` = 201, or a non-numeric `page`/`pageSize`, when the user requests the list, then the request is rejected as a validation error (400 Bad Request) — never silently defaulted or clamped.
+- **AC6b — Maximum page size is accepted:** Given `pageSize` = 200 (the ceiling), when the user requests the list, then the request succeeds — the bound must reject 201 without also rejecting the largest legal value.
 - **AC7 — Default paging:** Given a request that omits both `page` and `pageSize`, when the user requests the list, then `page` = 1 and `pageSize` = 50 are used and echoed in the response.
 - **AC8 — Deterministic ordering:** Given two tables whose labels differ only by case, or two tables with identical labels (permitted — `create-table.md` does not require uniqueness), then repeated requests return them in the same relative order every time, using `Label` (case-insensitive) then `TableId` as the total order.
 - **AC9 — Missing permission:** Given an authenticated user without the `restaurant.tables.read` permission, when they request the list, then the request is rejected as Forbidden.
@@ -103,6 +104,7 @@ Internal implementation details MUST NOT be exposed in any error response, per `
 - **Writes:** none. This is a pure read capability.
 - No schema change and no grants migration are expected: `restaurant.tables` already exists (`0001_restaurant_tables.sql`), has `ix_restaurant_tables_tenant_id`, and the least-privilege application role already holds `SELECT` on it (`0004_grants.sql`). If implementation discovers a missing privilege, that is a finding to raise rather than a silent addition.
 - Ordering by `lower(label)` cannot use a plain b-tree index on `label`; at expected floor sizes a sort after the tenant-filtered read is acceptable and no functional index is introduced.
+- Ordering is performed by PostgreSQL under the database's default collation, not with a locale-aware comparison: accented labels sort by the database's rules rather than a Spanish-specific alphabet. Accepted for this version for the same reason `GetMenuItems` gives.
 - Tenant isolation MUST follow ADR 0002 (application-level scoping plus PostgreSQL RLS).
 
 ## Integration Requirements
@@ -119,7 +121,8 @@ Internal implementation details MUST NOT be exposed in any error response, per `
   - **Multi-tenant scoping (AC3):** two tenants with tables, asserting the response and `totalCount` contain only the caller's.
   - **Pagination correctness (AC4/AC5):** seeded tables across several pages, asserting disjoint pages, stable ordering, a correct `totalCount`, and an empty page past the end.
   - **Ordering stability (AC8):** identical and case-differing labels, asserting repeated requests return an identical order — labels are not unique per tenant (`create-table.md`), so the `TableId` tiebreaker is what makes this test meaningful.
-  - **Boundary validation (AC6):** `page=0`, negative, `pageSize=0`, `pageSize=201`, and non-numeric values each rejected with 400.
+  - **Boundary validation (AC6/AC6b):** `page=0`, negative, `pageSize=0`, `pageSize=201`, and non-numeric values each rejected with 400, while `pageSize=200` is accepted — the ceiling must not be off by one.
+  - **Response shape (AC1):** the serialized table carries exactly the documented fields and no `tenantId`.
   - **Read-your-writes / CreateOrder integration (AC11):** a table listed here can immediately be used as `CreateOrder`'s `tableId`, proving the listing and Ordering agree on what exists.
   - **Read-side RLS:** the existing `RowLevelSecurityTests.AppRole_CannotSeeAnotherTenantsTableEvenWithoutApplicationFiltering` already proves `restaurant.tables` is isolated by RLS independently of application filtering; AC3 additionally covers application-level scoping, so no new RLS test is required unless implementation reveals a gap.
 
