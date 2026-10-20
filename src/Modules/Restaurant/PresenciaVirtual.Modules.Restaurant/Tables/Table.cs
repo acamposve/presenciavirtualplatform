@@ -45,4 +45,12 @@ public sealed class Table
 
         return new Table(Guid.NewGuid(), tenantId, label, createdAt);
     }
+
+    /// <summary>
+    /// Rehydrates an existing table from persistence (specs/restaurant/tables/list-tables.md).
+    /// Not for creating new tables — use <see cref="Register"/>. Mirrors
+    /// <see cref="Menu.MenuItem.Reconstruct(Guid, Guid, string, decimal, bool, DateTimeOffset)"/>.
+    /// </summary>
+    public static Table Reconstruct(Guid id, Guid tenantId, string label, DateTimeOffset createdAt)
+        => new(id, tenantId, label, createdAt);
 }

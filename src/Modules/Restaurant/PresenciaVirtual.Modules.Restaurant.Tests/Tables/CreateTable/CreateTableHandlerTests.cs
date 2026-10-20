@@ -37,6 +37,9 @@ public class CreateTableHandlerTests
             SavedTables.Add(table);
             return Task.CompletedTask;
         }
+
+        public Task<TablePage> GetPageAsync(Guid tenantId, int page, int pageSize, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by CreateTableHandler.");
     }
 
     private sealed class FakeCurrentUserContext(Guid tenantId) : ICurrentUserContext

@@ -1,6 +1,7 @@
 using Dapper;
 using PresenciaVirtual.Modules.Core.Persistence;
 using PresenciaVirtual.Modules.Restaurant.Menu;
+using PresenciaVirtual.Modules.Restaurant.Paging;
 
 namespace PresenciaVirtual.Modules.Restaurant.Infrastructure.Menu;
 
@@ -38,6 +39,35 @@ public sealed class MenuItemRepository(ITenantDbConnectionFactory connectionFact
             menuItem.IsAlcoholic,
             menuItem.CreatedAt,
         });
+    }
+
+    public async Task<MenuItemPage> GetPageAsync(Guid tenantId, int page, int pageSize, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+
+        // Repeatable read, not the default read-committed: the page and the total count are two
+        // statements, and the specification (FR3/BR5) requires them to agree with each other. Under
+        // read-committed a concurrent CreateMenuItem could commit between them and make
+        // totalCount disagree with the page it describes.
+        using var transaction = connection.BeginTransaction(System.Data.IsolationLevel.RepeatableRead);
+
+        const string pageSql = """
+            SELECT id, tenant_id, name, price, is_alcoholic, created_at
+            FROM restaurant.menu_items
+            WHERE tenant_id = @tenantId
+            ORDER BY lower(name), id
+            LIMIT @pageSize OFFSET @offset;
+            """;
+
+        var offset = PageRequest.Offset(page, pageSize);
+        var rows = await connection.QueryAsync<MenuItemRow>(pageSql, new { tenantId, pageSize, offset }, transaction);
+
+        var totalCount = await connection.ExecuteScalarAsync<int>(
+            "SELECT count(*)::int FROM restaurant.menu_items WHERE tenant_id = @tenantId;", new { tenantId }, transaction);
+
+        transaction.Commit();
+
+        return new MenuItemPage([.. rows.Select(r => r.ToDomain())], totalCount);
     }
 
     // Npgsql returns "timestamptz" as DateTime (UTC), not DateTimeOffset; Dapper's constructor

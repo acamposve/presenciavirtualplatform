@@ -10,6 +10,7 @@ using PresenciaVirtual.Modules.Restaurant.Infrastructure.Settings;
 using PresenciaVirtual.Modules.Restaurant.Infrastructure.Tables;
 using PresenciaVirtual.Modules.Restaurant.Menu;
 using PresenciaVirtual.Modules.Restaurant.Menu.CreateMenuItem;
+using PresenciaVirtual.Modules.Restaurant.Menu.GetMenuItems;
 using PresenciaVirtual.Modules.Restaurant.Ordering;
 using PresenciaVirtual.Modules.Restaurant.Ordering.AddItem;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CancelOrder;
@@ -20,6 +21,7 @@ using PresenciaVirtual.Modules.Restaurant.Settings;
 using PresenciaVirtual.Modules.Restaurant.Settings.UpdateRestaurantSettings;
 using PresenciaVirtual.Modules.Restaurant.Tables;
 using PresenciaVirtual.Modules.Restaurant.Tables.CreateTable;
+using PresenciaVirtual.Modules.Restaurant.Tables.ListTables;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -29,6 +31,11 @@ builder.Services.AddHealthChecks();
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddPresenciaVirtualAuthentication(builder.Configuration);
 builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.orders.create", "restaurant.tables.create", "restaurant.orders.additem", "restaurant.orders.read", "restaurant.orders.close", "restaurant.orders.cancel", "restaurant.menuitems.create", "restaurant.settings.update"]));
+
+// Read permissions for the two listing capabilities (specs/restaurant/menu/get-menu-items.md,
+// specs/restaurant/tables/list-tables.md), registered in their own call so a listing capability's
+// permission never has to be threaded into the line above alongside unrelated ones.
+builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.menuitems.read", "restaurant.tables.read"]));
 
 builder.Services.AddScoped<ICurrentUserContext, HttpContextCurrentUserContext>();
 builder.Services.AddScoped<ITenantDbConnectionFactory, NpgsqlTenantDbConnectionFactory>();
@@ -48,6 +55,10 @@ builder.Services.AddScoped<CloseOrderHandler>();
 builder.Services.AddScoped<CancelOrderHandler>();
 builder.Services.AddScoped<CreateMenuItemHandler>();
 builder.Services.AddScoped<UpdateRestaurantSettingsHandler>();
+
+// Listing capabilities (specs/restaurant/menu/get-menu-items.md, specs/restaurant/tables/list-tables.md).
+builder.Services.AddScoped<GetMenuItemsHandler>();
+builder.Services.AddScoped<ListTablesHandler>();
 
 var app = builder.Build();
 
