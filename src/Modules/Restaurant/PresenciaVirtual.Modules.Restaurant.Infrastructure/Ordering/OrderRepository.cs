@@ -2,6 +2,7 @@ using Dapper;
 using Npgsql;
 using PresenciaVirtual.Modules.Core.Persistence;
 using PresenciaVirtual.Modules.Restaurant.Ordering;
+using PresenciaVirtual.Modules.Restaurant.Ordering.CancelOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CloseOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 
@@ -240,9 +241,105 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
         return order;
     }
 
+    public async Task<Order> CancelAsync(Guid tenantId, Guid orderId, string? idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        using var transaction = connection.BeginTransaction();
+
+        // BR7: exactly the same order-scoped lock AddItem's merge and CloseOrder's transition
+        // acquire - this is what serializes a cancel against a concurrent AddItem (AC15) and
+        // against a concurrent CloseOrder (AC14), and it is acquired first for the same
+        // single-lock-ordering reason OrderLock documents.
+        await LockAsync(connection, transaction, OrderLock.Key(tenantId, orderId));
+
+        if (idempotencyKey is { Length: > 0 } key)
+        {
+            // BR3: the claim check runs before resolving whether OrderId exists at all, so a key
+            // reused for a different order is deterministically a conflict regardless of what
+            // that order turns out to be (nonexistent, cross-tenant, or a genuine different order
+            // in this tenant) - see cancel-order.md's Error Scenarios note on this precedence.
+            await LockAsync(connection, transaction, $"cancelorder-key:{tenantId}:{key}");
+
+            var claimedOrderId = await connection.QuerySingleOrDefaultAsync<Guid?>(
+                "SELECT order_id FROM restaurant.cancel_order_idempotency_keys WHERE tenant_id = @tenantId AND idempotency_key = @key;",
+                new { tenantId, key }, transaction);
+
+            if (claimedOrderId is not null)
+            {
+                if (claimedOrderId != orderId)
+                {
+                    transaction.Rollback();
+                    throw new CancelOrderIdempotencyKeyConflictException(key);
+                }
+
+                // A replay MUST NOT attempt to transition the order again (BR3), and MUST reflect
+                // the order's CURRENT state rather than a frozen snapshot of the original
+                // cancellation (AC8) - on this same, still-open connection rather than a fresh
+                // one via GetAsync, so a replay does not hold two pooled connections at once.
+                var replayRow = await connection.QuerySingleAsync<OrderRow>(SelectOrderSql, new { tenantId, orderId }, transaction);
+                var replayItems = (await connection.QueryAsync<OrderItem>(ItemsSql, new { tenantId, orderId }, transaction)).ToList();
+                transaction.Commit();
+                return replayRow.ToDomain(replayItems);
+            }
+        }
+
+        var row = await connection.QuerySingleOrDefaultAsync<OrderRow>(SelectOrderSql, new { tenantId, orderId }, transaction);
+        if (row is null)
+        {
+            transaction.Rollback();
+            throw new CancelOrderNotFoundException(orderId);
+        }
+
+        var persistedStatus = Enum.Parse<OrderStatus>(row.Status);
+
+        try
+        {
+            // BR1: the domain-level invariant, enforced independently of the database-level guard
+            // below - both must agree for the transition to actually happen. Items are irrelevant
+            // to this check (Cancel() only inspects Status), so an empty placeholder list is used
+            // here; the real items are (re-)read after the transition below, per Data Requirements.
+            row.ToDomain([]).Cancel();
+        }
+        catch (InvalidOperationException)
+        {
+            transaction.Rollback();
+            throw new OrderNotCancellableException(orderId, persistedStatus);
+        }
+
+        // BR4: the affected-row count is what actually makes this a guard rather than a no-op. It
+        // is also what makes a race against a concurrent CloseOrder resolve to exactly one winner
+        // (AC14): whichever transition commits first flips status away from 'Open', so the other's
+        // UPDATE - still conditioned on status = 'Open' - affects zero rows and is rejected.
+        var rowsAffected = await connection.ExecuteAsync(
+            "UPDATE restaurant.orders SET status = 'Cancelled' WHERE tenant_id = @tenantId AND id = @orderId AND status = 'Open';",
+            new { tenantId, orderId }, transaction);
+
+        if (rowsAffected != 1)
+        {
+            transaction.Rollback();
+            throw new OrderNotCancellableException(orderId, persistedStatus);
+        }
+
+        // Read after the UPDATE, still within this same open transaction (Data Requirements): a
+        // concurrent AddItem that legitimately committed just before this UPDATE (AC15's "both
+        // succeed" case) must still show up in the response, and nothing added after the
+        // cancellation can be - AddItem's own guard rejects it once status is no longer Open.
+        var items = (await connection.QueryAsync<OrderItem>(ItemsSql, new { tenantId, orderId }, transaction)).ToList();
+        var order = Order.Reconstruct(row.Id, row.Tenant_Id, row.Table_Id, row.Created_By_User_Id, new DateTimeOffset(DateTime.SpecifyKind(row.Created_At, DateTimeKind.Utc)), OrderStatus.Cancelled, items);
+
+        if (idempotencyKey is { Length: > 0 } keyToClaim)
+        {
+            await connection.ExecuteAsync(
+                "INSERT INTO restaurant.cancel_order_idempotency_keys (tenant_id, idempotency_key, order_id) VALUES (@tenantId, @keyToClaim, @orderId);",
+                new { tenantId, keyToClaim, orderId }, transaction);
+        }
+
+        transaction.Commit();
+        return order;
+    }
+
     private static Task LockAsync(System.Data.IDbConnection connection, System.Data.IDbTransaction transaction, string lockKey)
         => connection.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, 0));", new { lockKey }, transaction);
-
     private const string ItemsSql = """
         SELECT id AS Id, order_id AS OrderId, menu_item_id AS MenuItemId, quantity AS Quantity, unit_price_snapshot AS UnitPriceSnapshot
         FROM restaurant.order_items

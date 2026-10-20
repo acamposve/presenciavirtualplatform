@@ -2,7 +2,9 @@ namespace PresenciaVirtual.Modules.Restaurant.Ordering;
 
 /// <summary>
 /// Aggregate root of the Ordering capability. Owns its line items (specs/restaurant/ordering/add-item.md),
-/// derives its Total from them (BR5), and can transition Open -> Closed (specs/restaurant/ordering/close-order.md).
+/// derives its Total from them (BR5), and has two mutually exclusive terminal transitions from
+/// Open: Open -> Closed (specs/restaurant/ordering/close-order.md) and Open -> Cancelled
+/// (specs/restaurant/ordering/cancel-order.md).
 /// </summary>
 public sealed class Order
 {
@@ -75,5 +77,24 @@ public sealed class Order
         }
 
         return new Order(Id, TenantId, TableId, CreatedByUserId, CreatedAt, OrderStatus.Closed, Items);
+    }
+
+    /// <summary>
+    /// Voids the order (specs/restaurant/ordering/cancel-order.md BR1/BR5): the other terminal
+    /// transition out of Open, structurally parallel to <see cref="Close"/>. Like closing, it is a
+    /// pure status transition — an order with items stays cancellable and its Items/Total are left
+    /// untouched (BR2/BR5), so voiding never rewrites history. This is the domain-level invariant,
+    /// enforced independently of — and in addition to — the database-level guard (BR4) that
+    /// protects the same rule under concurrency.
+    /// </summary>
+    /// <exception cref="InvalidOperationException">The order is not currently Open (e.g. already Closed or already Cancelled).</exception>
+    public Order Cancel()
+    {
+        if (Status != OrderStatus.Open)
+        {
+            throw new InvalidOperationException($"Order '{Id}' cannot be cancelled because its status is '{Status}', not '{OrderStatus.Open}'.");
+        }
+
+        return new Order(Id, TenantId, TableId, CreatedByUserId, CreatedAt, OrderStatus.Cancelled, Items);
     }
 }

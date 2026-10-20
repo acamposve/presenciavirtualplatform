@@ -1,5 +1,6 @@
 using Microsoft.AspNetCore.Mvc;
 using PresenciaVirtual.Modules.Restaurant.Ordering.AddItem;
+using PresenciaVirtual.Modules.Restaurant.Ordering.CancelOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CloseOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.GetOrder;
@@ -23,6 +24,9 @@ public static class OrderEndpoints
 
         group.MapPost("/{orderId:guid}/close", CloseOrderAsync)
             .RequireAuthorization("restaurant.orders.close");
+
+        group.MapPost("/{orderId:guid}/cancel", CancelOrderAsync)
+            .RequireAuthorization("restaurant.orders.cancel");
 
         return app;
     }
@@ -222,4 +226,51 @@ public static class OrderEndpoints
     private sealed record CloseOrderResponseLine(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot, decimal LineTotal);
 
     private sealed record CloseOrderResponse(Guid OrderId, Guid TableId, string Status, DateTimeOffset CreatedAt, IReadOnlyList<CloseOrderResponseLine> Items, decimal Total);
+
+    private static async Task<IResult> CancelOrderAsync(
+        Guid orderId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        CancelOrderHandler handler,
+        CancellationToken cancellationToken)
+    {
+        var command = new CancelOrderCommand(orderId, idempotencyKey);
+
+        var errors = CancelOrderValidator.Validate(command);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [.. errors] });
+        }
+
+        try
+        {
+            var result = await handler.HandleAsync(command, cancellationToken);
+
+            var response = new CancelOrderResponse(
+                result.OrderId,
+                result.TableId,
+                result.Status.ToString(),
+                result.CreatedAt,
+                [.. result.Items.Select(i => new CancelOrderResponseLine(i.MenuItemId, i.Quantity, i.UnitPriceSnapshot, i.LineTotal))],
+                result.Total);
+
+            return Results.Ok(response);
+        }
+        catch (CancelOrderNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (OrderNotCancellableException)
+        {
+            // AC3/AC4: already Cancelled or already Closed - both are "no longer Open" (BR1).
+            return Results.Conflict();
+        }
+        catch (CancelOrderIdempotencyKeyConflictException)
+        {
+            return Results.Conflict();
+        }
+    }
+
+    private sealed record CancelOrderResponseLine(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot, decimal LineTotal);
+
+    private sealed record CancelOrderResponse(Guid OrderId, Guid TableId, string Status, DateTimeOffset CreatedAt, IReadOnlyList<CancelOrderResponseLine> Items, decimal Total);
 }

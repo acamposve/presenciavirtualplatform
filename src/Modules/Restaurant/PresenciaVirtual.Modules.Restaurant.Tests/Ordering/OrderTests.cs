@@ -147,4 +147,84 @@ public class OrderTests
         Assert.Equal(userId, closed.CreatedByUserId);
         Assert.Equal(createdAt, closed.CreatedAt);
     }
+
+    [Fact]
+    public void Cancel_TransitionsAnOpenOrderToCancelled()
+    {
+        var order = Order.Open(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        var cancelled = order.Cancel();
+
+        Assert.Equal(OrderStatus.Cancelled, cancelled.Status);
+    }
+
+    [Fact]
+    public void Cancel_LeavesTheOriginalOrderUnchanged()
+    {
+        // The transition is functional: the aggregate it was called on is not mutated in place,
+        // so a caller still holding the Open instance keeps seeing Open.
+        var order = Order.Open(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow);
+
+        _ = order.Cancel();
+
+        Assert.Equal(OrderStatus.Open, order.Status);
+    }
+
+    [Fact]
+    public void Cancel_RejectsAnOrderThatIsAlreadyClosed()
+    {
+        // AC4: a completed service cannot be voided through this capability (BR1/BR6).
+        var order = Order.Open(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow).Close();
+
+        Assert.Throws<InvalidOperationException>(() => order.Cancel());
+    }
+
+    [Fact]
+    public void Cancel_RejectsAnOrderThatIsAlreadyCancelled()
+    {
+        var order = Order.Open(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow).Cancel();
+
+        Assert.Throws<InvalidOperationException>(() => order.Cancel());
+    }
+
+    [Fact]
+    public void Cancel_PreservesItemsAndTotal()
+    {
+        // BR2/BR5: cancelling is a pure status transition - an order with lines stays cancellable
+        // and its persisted items/total are left exactly as they were.
+        var items = new[] { new OrderItem(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), 2, 3m) };
+        var order = Order.Reconstruct(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, OrderStatus.Open, items);
+
+        var cancelled = order.Cancel();
+
+        Assert.Equal(items, cancelled.Items);
+        Assert.Equal(6m, cancelled.Total);
+    }
+
+    [Fact]
+    public void Cancel_PreservesIdentityAndCreationFields()
+    {
+        var id = Guid.NewGuid();
+        var tenantId = Guid.NewGuid();
+        var tableId = Guid.NewGuid();
+        var userId = Guid.NewGuid();
+        var createdAt = DateTimeOffset.UtcNow;
+        var order = Order.Reconstruct(id, tenantId, tableId, userId, createdAt, OrderStatus.Open, items: []);
+
+        var cancelled = order.Cancel();
+
+        Assert.Equal(id, cancelled.Id);
+        Assert.Equal(tenantId, cancelled.TenantId);
+        Assert.Equal(tableId, cancelled.TableId);
+        Assert.Equal(userId, cancelled.CreatedByUserId);
+        Assert.Equal(createdAt, cancelled.CreatedAt);
+    }
+
+    [Fact]
+    public void Reconstruct_PreservesTheCancelledStatus()
+    {
+        var order = Order.Reconstruct(Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), Guid.NewGuid(), DateTimeOffset.UtcNow, OrderStatus.Cancelled, items: []);
+
+        Assert.Equal(OrderStatus.Cancelled, order.Status);
+    }
 }
