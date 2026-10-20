@@ -153,6 +153,9 @@ public class AddItemHandlerTests
 
         public Task AddAsync(MenuItem menuItem, CancellationToken cancellationToken = default)
             => throw new NotSupportedException("Not used by AddItemHandler.");
+
+        public Task<MenuItemPage> GetPageAsync(Guid tenantId, int page, int pageSize, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by AddItemHandler.");
     }
 
     private sealed class FakeOrderItemRepository : IOrderItemRepository

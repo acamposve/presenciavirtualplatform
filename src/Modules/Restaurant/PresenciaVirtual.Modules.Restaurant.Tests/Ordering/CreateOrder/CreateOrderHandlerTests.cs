@@ -103,6 +103,9 @@ public class CreateOrderHandlerTests
             _existingTableIds.Add(table.Id);
             return Task.CompletedTask;
         }
+
+        public Task<TablePage> GetPageAsync(Guid tenantIdArg, int page, int pageSize, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by CreateOrderHandler.");
     }
 
     private sealed class FakeOrderRepository(Dictionary<(Guid TenantId, string Key), IdempotencyRecord>? idempotencyRegistry = null) : IOrderRepository

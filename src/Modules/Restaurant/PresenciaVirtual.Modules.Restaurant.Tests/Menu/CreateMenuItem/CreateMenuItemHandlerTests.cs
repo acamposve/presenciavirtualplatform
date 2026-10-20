@@ -50,6 +50,9 @@ public class CreateMenuItemHandlerTests
             SavedMenuItems.Add(menuItem);
             return Task.CompletedTask;
         }
+
+        public Task<MenuItemPage> GetPageAsync(Guid tenantId, int page, int pageSize, CancellationToken cancellationToken = default)
+            => throw new NotSupportedException("Not used by CreateMenuItemHandler.");
     }
 
     private sealed class FakeCurrentUserContext(Guid tenantId) : ICurrentUserContext
