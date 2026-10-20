@@ -16,6 +16,7 @@ using PresenciaVirtual.Modules.Restaurant.Ordering.CancelOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CloseOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.GetOrder;
+using PresenciaVirtual.Modules.Restaurant.Ordering.RemoveItem;
 using PresenciaVirtual.Modules.Restaurant.Settings;
 using PresenciaVirtual.Modules.Restaurant.Settings.UpdateRestaurantSettings;
 using PresenciaVirtual.Modules.Restaurant.Tables;
@@ -28,7 +29,7 @@ builder.Services.AddHealthChecks();
 
 builder.Services.AddHttpContextAccessor();
 builder.Services.AddPresenciaVirtualAuthentication(builder.Configuration);
-builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.orders.create", "restaurant.tables.create", "restaurant.orders.additem", "restaurant.orders.read", "restaurant.orders.close", "restaurant.orders.cancel", "restaurant.menuitems.create", "restaurant.settings.update"]));
+builder.Services.AddAuthorization(options => options.AddPermissionPolicies(["restaurant.orders.create", "restaurant.tables.create", "restaurant.orders.additem", "restaurant.orders.read", "restaurant.orders.close", "restaurant.orders.cancel", "restaurant.orders.removeitem", "restaurant.menuitems.create", "restaurant.settings.update"]));
 
 builder.Services.AddScoped<ICurrentUserContext, HttpContextCurrentUserContext>();
 builder.Services.AddScoped<ITenantDbConnectionFactory, NpgsqlTenantDbConnectionFactory>();
@@ -46,6 +47,7 @@ builder.Services.AddScoped<AddItemHandler>();
 builder.Services.AddScoped<GetOrderHandler>();
 builder.Services.AddScoped<CloseOrderHandler>();
 builder.Services.AddScoped<CancelOrderHandler>();
+builder.Services.AddScoped<RemoveItemHandler>();
 builder.Services.AddScoped<CreateMenuItemHandler>();
 builder.Services.AddScoped<UpdateRestaurantSettingsHandler>();
 

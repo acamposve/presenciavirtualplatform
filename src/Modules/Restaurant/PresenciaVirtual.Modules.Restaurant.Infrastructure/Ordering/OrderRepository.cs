@@ -5,6 +5,7 @@ using PresenciaVirtual.Modules.Restaurant.Ordering;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CancelOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CloseOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
+using PresenciaVirtual.Modules.Restaurant.Ordering.RemoveItem;
 
 namespace PresenciaVirtual.Modules.Restaurant.Infrastructure.Ordering;
 
@@ -338,6 +339,93 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
         return order;
     }
 
+    public async Task<Order> RemoveItemAsync(Guid tenantId, Guid orderId, Guid menuItemId, string? idempotencyKey, CancellationToken cancellationToken = default)
+    {
+        using var connection = await connectionFactory.OpenConnectionAsync(cancellationToken);
+        using var transaction = connection.BeginTransaction();
+
+        // BR4: the shared order-scoped lock, acquired first - the same lock and the same ordering
+        // AddItem's merge, CloseOrder's transition and CancelOrder's transition already use, so a
+        // removal serializes against all of them without any new lock and without deadlock.
+        await LockAsync(connection, transaction, OrderLock.Key(tenantId, orderId));
+
+        if (idempotencyKey is { Length: > 0 } key)
+        {
+            // BR6: the claim check runs before resolving whether the order or the line exists, so
+            // a key reused for a different order or item is deterministically a conflict rather
+            // than a 404 that depends on what those identifiers happen to resolve to.
+            await LockAsync(connection, transaction, $"removeitem-key:{tenantId}:{key}");
+
+            var claim = await connection.QuerySingleOrDefaultAsync<RemoveItemClaim>(
+                "SELECT order_id AS OrderId, menu_item_id AS MenuItemId FROM restaurant.remove_item_idempotency_keys WHERE tenant_id = @tenantId AND idempotency_key = @key;",
+                new { tenantId, key }, transaction);
+
+            if (claim is not null)
+            {
+                if (claim.OrderId != orderId || claim.MenuItemId != menuItemId)
+                {
+                    transaction.Rollback();
+                    throw new RemoveItemIdempotencyKeyConflictException(key);
+                }
+
+                // A replay MUST NOT delete again (BR6) and MUST reflect the order's current state
+                // (AC9) - a second delete would report the line as not found even though the
+                // original request succeeded. Re-read on this same, still-open connection rather
+                // than via GetAsync, so a replay does not hold two pooled connections at once.
+                var replayRow = await connection.QuerySingleAsync<OrderRow>(SelectOrderSql, new { tenantId, orderId }, transaction);
+                var replayItems = (await connection.QueryAsync<OrderItem>(ItemsSql, new { tenantId, orderId }, transaction)).ToList();
+                transaction.Commit();
+                return replayRow.ToDomain(replayItems);
+            }
+        }
+
+        var row = await connection.QuerySingleOrDefaultAsync<OrderRow>(SelectOrderSql, new { tenantId, orderId }, transaction);
+        if (row is null)
+        {
+            transaction.Rollback();
+            throw new RemoveItemOrderNotFoundException(orderId);
+        }
+
+        // BR1/AC3: a Closed or Cancelled order's contents are final. Checked before the line's own
+        // existence, so an order that is both not Open and missing the line reports the status
+        // conflict rather than a 404 that would imply the order is still open (remove-item.md's
+        // Error Scenarios note).
+        var persistedStatus = Enum.Parse<OrderStatus>(row.Status);
+        if (persistedStatus != OrderStatus.Open)
+        {
+            transaction.Rollback();
+            throw new OrderNotRemovableException(orderId, persistedStatus);
+        }
+
+        // BR5: the affected-row count is what makes this a guarded delete rather than a silent
+        // no-op - it is also what makes two concurrent removals of the same line resolve to
+        // exactly one success and one 404 (AC12), and what keeps a second removal from "succeeding"
+        // after the first one already deleted the row.
+        var rowsAffected = await connection.ExecuteAsync(
+            "DELETE FROM restaurant.order_items WHERE tenant_id = @tenantId AND order_id = @orderId AND menu_item_id = @menuItemId;",
+            new { tenantId, orderId, menuItemId }, transaction);
+
+        if (rowsAffected != 1)
+        {
+            transaction.Rollback();
+            throw new OrderItemNotFoundException(orderId, menuItemId);
+        }
+
+        // Read after the DELETE, in the same transaction (Data Requirements): the response reflects
+        // exactly the lines that survived, never a stale pre-delete list.
+        var items = (await connection.QueryAsync<OrderItem>(ItemsSql, new { tenantId, orderId }, transaction)).ToList();
+
+        if (idempotencyKey is { Length: > 0 } keyToClaim)
+        {
+            await connection.ExecuteAsync(
+                "INSERT INTO restaurant.remove_item_idempotency_keys (tenant_id, idempotency_key, order_id, menu_item_id) VALUES (@tenantId, @keyToClaim, @orderId, @menuItemId);",
+                new { tenantId, keyToClaim, orderId, menuItemId }, transaction);
+        }
+
+        transaction.Commit();
+        return row.ToDomain(items);
+    }
+
     private static Task LockAsync(System.Data.IDbConnection connection, System.Data.IDbTransaction transaction, string lockKey)
         => connection.ExecuteAsync("SELECT pg_advisory_xact_lock(hashtextextended(@lockKey, 0));", new { lockKey }, transaction);
     private const string ItemsSql = """
@@ -359,4 +447,7 @@ public sealed class OrderRepository(ITenantDbConnectionFactory connectionFactory
     {
         public Order ToDomain(IReadOnlyList<OrderItem> items) => Order.Reconstruct(Id, Tenant_Id, Table_Id, Created_By_User_Id, new DateTimeOffset(DateTime.SpecifyKind(Created_At, DateTimeKind.Utc)), Enum.Parse<OrderStatus>(Status), items);
     }
+
+    /// <summary>BR6: the identifiers a remove-item idempotency key was originally claimed for.</summary>
+    private sealed record RemoveItemClaim(Guid OrderId, Guid MenuItemId);
 }

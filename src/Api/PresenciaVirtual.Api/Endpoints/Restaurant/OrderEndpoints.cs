@@ -4,6 +4,7 @@ using PresenciaVirtual.Modules.Restaurant.Ordering.CancelOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CloseOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.CreateOrder;
 using PresenciaVirtual.Modules.Restaurant.Ordering.GetOrder;
+using PresenciaVirtual.Modules.Restaurant.Ordering.RemoveItem;
 
 namespace PresenciaVirtual.Api.Endpoints.Restaurant;
 
@@ -27,6 +28,9 @@ public static class OrderEndpoints
 
         group.MapPost("/{orderId:guid}/cancel", CancelOrderAsync)
             .RequireAuthorization("restaurant.orders.cancel");
+
+        group.MapDelete("/{orderId:guid}/items/{menuItemId:guid}", RemoveItemAsync)
+            .RequireAuthorization("restaurant.orders.removeitem");
 
         return app;
     }
@@ -273,4 +277,54 @@ public static class OrderEndpoints
     private sealed record CancelOrderResponseLine(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot, decimal LineTotal);
 
     private sealed record CancelOrderResponse(Guid OrderId, Guid TableId, string Status, DateTimeOffset CreatedAt, IReadOnlyList<CancelOrderResponseLine> Items, decimal Total);
+
+    private static async Task<IResult> RemoveItemAsync(
+        Guid orderId,
+        Guid menuItemId,
+        [FromHeader(Name = "Idempotency-Key")] string? idempotencyKey,
+        RemoveItemHandler handler,
+        CancellationToken cancellationToken)
+    {
+        var command = new RemoveItemCommand(orderId, menuItemId, idempotencyKey);
+
+        var errors = RemoveItemValidator.Validate(command);
+        if (errors.Count > 0)
+        {
+            return Results.ValidationProblem(new Dictionary<string, string[]> { ["request"] = [.. errors] });
+        }
+
+        try
+        {
+            var result = await handler.HandleAsync(command, cancellationToken);
+
+            var response = new RemoveItemResponse(
+                result.OrderId,
+                [.. result.Items.Select(i => new RemoveItemResponseLine(i.MenuItemId, i.Quantity, i.UnitPriceSnapshot, i.LineTotal))],
+                result.Total);
+
+            return Results.Ok(response);
+        }
+        catch (RemoveItemOrderNotFoundException)
+        {
+            return Results.NotFound();
+        }
+        catch (OrderItemNotFoundException)
+        {
+            // AC4: the order is Open but has no such line (never added, or already removed).
+            return Results.NotFound();
+        }
+        catch (OrderNotRemovableException)
+        {
+            // AC3: already Closed or already Cancelled - the order's contents are final (BR1).
+            return Results.Conflict();
+        }
+        catch (RemoveItemIdempotencyKeyConflictException)
+        {
+            return Results.Conflict();
+        }
+    }
+
+    private sealed record RemoveItemResponseLine(Guid MenuItemId, int Quantity, decimal UnitPriceSnapshot, decimal LineTotal);
+
+    private sealed record RemoveItemResponse(Guid OrderId, IReadOnlyList<RemoveItemResponseLine> Items, decimal Total);
 }
