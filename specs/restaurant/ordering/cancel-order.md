@@ -1,12 +1,12 @@
 # Specification: Ordering / CancelOrder
 
-**Status:** Draft
+**Status:** Approved
 **Bounded Context:** Restaurant
 **Business Capability:** Ordering
 **Related ADRs:** [ADR 0002 — Tenant Isolation Strategy](../../../docs/adr/0002-tenant-isolation-strategy.md)
-**Last Updated:** 2026-09-13
+**Last Updated:** 2026-10-20
 
-This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4.
+This specification follows `constitution.md` Article I. It requires human review and approval before implementation begins, per Article 1.4. Approved after three rounds of review (the idempotency-claim check taking precedence over order resolution, an order with items staying cancellable with its items and total left untouched, and the concurrency guarantees against a concurrent `CloseOrder` and `AddItem`), in [PR #24](https://github.com/acamposve/presenciavirtualplatform/pull/24).
 
 ---
 
